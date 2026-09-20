@@ -186,6 +186,8 @@ public class TextToSpeechWindow : Window
                 return StatusDots.From(engine.IsInstalled(null).Result, IndexTtsCrispAsr.GetEngineUpdateStatus());
             case PocketTtsCrispAsr:
                 return StatusDots.From(engine.IsInstalled(null).Result, PocketTtsCrispAsr.GetEngineUpdateStatus());
+            case SupertonicCrispAsr:
+                return StatusDots.From(engine.IsInstalled(null).Result, SupertonicCrispAsr.GetEngineUpdateStatus());
             case DotsTtsCrispAsr:
                 return StatusDots.From(engine.IsInstalled(null).Result, DotsTtsCrispAsr.GetEngineUpdateStatus());
             case Confucius4TtsCrispAsr:
@@ -690,6 +692,25 @@ public class TextToSpeechWindow : Window
         };
         var panelAddAudioWithHint = WithCheckBoxHint(panelAddAudioToVideoFile, Se.Language.Video.TextToSpeech.AddAudioToVideoFileHint);
 
+        var checkBoxAddBackgroundMusic = new CheckBox
+        {
+            Content = Se.Language.Video.BackgroundMusic.AddBackgroundMusic,
+            VerticalAlignment = VerticalAlignment.Top,
+            [!CheckBox.IsCheckedProperty] = new Binding(nameof(vm.DoAddBackgroundMusic)) { Mode = BindingMode.TwoWay }
+        };
+        var panelAddBackgroundMusic = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Top,
+            Children =
+            {
+                checkBoxAddBackgroundMusic,
+                UiUtil.MakeButton(vm.ShowBackgroundMusicSettingsCommand, IconNames.Settings, $"{Se.Language.Video.BackgroundMusic.AddBackgroundMusic} - {Se.Language.General.Settings}")
+                      .WithMarginLeft(5).WithMarginTop(0).WithTopAlignment(),
+            }
+        };
+        var panelAddBackgroundMusicWithHint = WithCheckBoxHint(panelAddBackgroundMusic, Se.Language.Video.BackgroundMusic.AddBackgroundMusicHint);
+
         var buttonAdvanced = UiUtil.MakeButton(Se.Language.General.AdvancedDotDotDot, vm.ShowAdvancedSettingsCommand)
             .WithMarginTop(5);
         // MakeButton defaults to Center; the right-side settings panel reads more cleanly with
@@ -700,6 +721,7 @@ public class TextToSpeechWindow : Window
         {
             RowDefinitions =
             {
+                new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Star) },
@@ -716,7 +738,8 @@ public class TextToSpeechWindow : Window
 
         grid.Add(panelReviewAudioClips, 0, 0);
         grid.Add(panelAddAudioWithHint, 1, 0);
-        grid.Add(buttonAdvanced, 2, 0);
+        grid.Add(panelAddBackgroundMusicWithHint, 2, 0);
+        grid.Add(buttonAdvanced, 3, 0);
 
         return UiUtil.MakeBorderForControl(grid);
     }

@@ -465,6 +465,11 @@ public static class InitMenu
             },
             new MenuItem
             {
+                Header = l.ImproveTimeCodes,
+                Command = vm.ShowImproveTimeCodesCommand,
+            },
+            new MenuItem
+            {
                 Header = l.BridgeGaps,
                 Command = vm.ShowBridgeGapsCommand,
             },
@@ -653,6 +658,12 @@ public static class InitMenu
             {
                 Header = Se.Language.Video.CutVideoDotDotDot,
                 Command = vm.VideoCutCommand,
+            },
+            new MenuItem
+            {
+                // ACE-Step 1.5 (audio.cpp) music, looped to the video's length.
+                Header = Se.Language.Video.BackgroundMusic.GenerateBackgroundMusicDotDotDot,
+                Command = vm.ShowVideoBackgroundMusicCommand,
             },
             new MenuItem
             {
@@ -1203,7 +1214,7 @@ public static class InitMenu
             {
                 vm.MenuPlugins.Items.Add(new MenuItem
                 {
-                    Header = entry.Plugin.Manifest.Name,
+                    Header = entry.Plugin.Manifest.Name.Replace("_", "__"), // a single "_" is an access-key marker
                     Command = entry.Command,
                     IsEnabled = entry.Plugin.CanRun,
                 });

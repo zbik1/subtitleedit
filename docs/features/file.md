@@ -149,6 +149,8 @@ Export subtitles as Blu-ray SUP image format.
 
 The image export window is shared by all image-based formats. For 3D video, set **3D** to *Half side-by-side* or *Half top/bottom*. Each image then holds a squeezed copy of the subtitle for each eye, placed by the alignment and margins. **Depth** moves the two copies apart: positive values bring the subtitle out of the screen, negative values push it back. For D-Cinema only **Z-position** is shown, which is written to each image in the XML.
 
+A 3D Blu-ray stores the depth of its subtitles for every frame, in "3D-Planes". To give each subtitle the depth the disc gives it, click the folder button next to **3D-Plane** and open the `.ofs` file for the track's 3D-Plane. BD3D2MK3D and OFSExtractor make these files, and tsMuxeR shows which 3D-Plane a subtitle track uses. Each subtitle then gets the depth nearest to the viewer during the frames it is shown on. **Depth** is used for subtitles whose frames have no depth in the 3D-Plane. The 3D-Plane is not saved in the profile, because it belongs to one movie. Batch convert uses a 3D-Plane saved next to each input file with the same name (`movie.sup` + `movie.ofs`), when a 3D mode is set in the export profile.
+
 ### Export to EBU STL
 
 Export subtitles in EBU STL format (used in European broadcasting).
@@ -221,6 +223,15 @@ View subtitle file statistics (character count, line count, reading speed, etc.)
 ## Restore Auto Backup
 
 Restore a previously auto-saved backup of a subtitle file.
+
+- **Menu:** File → Restore auto-backup...
+
+The **Settings** tab lists the backups of `Settings.json` (your settings and shortcuts):
+
+- A backup is taken when Subtitle Edit starts, if the newest one is older than the **Settings backup interval (days)** from Options → Settings - `0` means every start. It is skipped when nothing but the recent files lists has changed since the newest backup.
+- **Back up now** takes a backup right away, e.g. before editing `Settings.json` by hand.
+- **Restore settings** replaces the current settings with the selected backup. The current settings are backed up first, so a restore can be undone. Some changes only take effect after restarting Subtitle Edit.
+- Only the newest backups are kept (30 by default).
 
 ## Open Containing Folder
 
