@@ -11,23 +11,13 @@ using Nikse.SubtitleEdit.Logic.ValueConverters;
 
 namespace Nikse.SubtitleEdit.Features.Actors;
 
-public class ActorPickerWindow : Window
+public static class ActorPanelView
 {
-    public ActorPickerWindow(ActorPickerViewModel vm)
+    public static Control Make(ActorPanelViewModel vm)
     {
-        UiUtil.InitializeWindow(this, GetType().Name);
-        Title = UiUtil.MakeWindowTitle(Se.Language.Tools.ActorPickerTitle);
-        Width = 260;
-        Height = 420;
-        MinWidth = 200;
-        MinHeight = 220;
-        CanResize = true;
-        vm.Window = this;
-        DataContext = vm;
-
         var itemsControl = new ItemsControl
         {
-            // MainViewModel replaces the whole Actors collection (e.g. SyncActorPickerActors),
+            // MainViewModel replaces the whole Actors collection (e.g. SyncActorPanelActors),
             // so this needs a real binding - a plain ItemsSource = vm.Actors would keep pointing
             // at the original, empty collection.
             [!ItemsControl.ItemsSourceProperty] = new Binding(nameof(vm.Actors)),
@@ -93,17 +83,53 @@ public class ActorPickerWindow : Window
                     },
                 };
 
+                var buttonMoveUp = new Button
+                {
+                    Content = "▲",
+                    FontSize = UiUtil.ScaledFontSize(9),
+                    Padding = new Thickness(4, 0),
+                    IsVisible = !actor.IsFirst,
+                    Command = vm.MoveActorUpCommand,
+                    CommandParameter = actor,
+                };
+                var buttonMoveDown = new Button
+                {
+                    Content = "▼",
+                    FontSize = UiUtil.ScaledFontSize(9),
+                    Padding = new Thickness(4, 0),
+                    IsVisible = !actor.IsLast,
+                    Command = vm.MoveActorDownCommand,
+                    CommandParameter = actor,
+                };
+                var moveButtons = new StackPanel
+                {
+                    Orientation = Orientation.Vertical,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Spacing = 1,
+                };
+                moveButtons.Children.Add(buttonMoveUp);
+                moveButtons.Children.Add(buttonMoveDown);
+
                 var subtleBorderBrush = UiUtil.GetTextColor(0.3d);
+
+                // The move buttons sit next to, not inside, assignButton - Avalonia buttons
+                // don't nest reliably.
+                var rowContent = new Grid
+                {
+                    ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+                };
+                rowContent.Add(assignButton, 0, 0);
+                rowContent.Add(moveButtons, 0, 1);
 
                 var rowBorder = new Border
                 {
                     BorderThickness = new Thickness(1),
                     BorderBrush = subtleBorderBrush,
                     CornerRadius = new CornerRadius(UiUtil.CornerRadius),
-                    Child = assignButton,
+                    Child = rowContent,
                 };
 
-                // DataContext here is the row's own ActorDisplayItem, not the window's vm.
+                // DataContext here is the row's own ActorDisplayItem, not the panel's vm.
                 var accentBrush = UiUtil.GetAccentBrush();
                 var accentColor = (accentBrush as SolidColorBrush)?.Color ?? Colors.DodgerBlue;
                 rowBorder.Bind(Border.BorderBrushProperty, new Binding(nameof(ActorDisplayItem.IsHighlighted))
@@ -147,17 +173,17 @@ public class ActorPickerWindow : Window
         bottomBar.Add(buttonNewActor, 0, 0);
         bottomBar.Add(buttonClearActor, 0, 1);
 
+        // No Width here: MainView puts the panel in its own Grid column, and the GridSplitter
+        // next to it resizes that column.
         var grid = new Grid
         {
             Margin = UiUtil.MakeWindowMargin(),
             RowDefinitions = new RowDefinitions("*,Auto"),
+            DataContext = vm,
         };
         grid.Add(scrollViewer, 0, 0);
         grid.Add(bottomBar, 1, 0);
 
-        Content = grid;
-
-        Loaded += delegate { UiUtil.RestoreWindowPosition(this); };
-        Closing += delegate { UiUtil.SaveWindowPosition(this); };
+        return grid;
     }
 }

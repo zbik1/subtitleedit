@@ -1,10 +1,13 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Data;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
 using Avalonia.Markup.Declarative;
 using Avalonia.Threading;
 using Microsoft.Extensions.DependencyInjection;
+using Nikse.SubtitleEdit.Features.Actors;
 using Nikse.SubtitleEdit.Features.Main.Layout;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
@@ -130,9 +133,70 @@ public partial class MainView : ViewBase
             }, DispatcherPriority.Loaded);
         };
 
-        root.Children.Add(_vm.ContentGrid);
+        root.Children.Add(MakeContentWithActorPanel(_vm));
 
         return root;
+    }
+
+    /// <summary>
+    /// Wraps the main content and the actor panel in one grid so a GridSplitter can resize them
+    /// against each other. The actor panel is deliberately kept out of <see cref="MainViewModel.ContentGrid"/>:
+    /// every layout switch runs InitLayout.CleanupOldContent() over that grid's children, which
+    /// would tear the panel down.
+    /// </summary>
+    private static Control MakeContentWithActorPanel(MainViewModel vm)
+    {
+        var contentColumn = new ColumnDefinition(1, GridUnitType.Star) { MinWidth = 400 };
+        var splitterColumn = new ColumnDefinition(GridLength.Auto);
+
+        // Starts collapsed: the panel is hidden until the user opens it. A column with an
+        // explicit width does not collapse on its own when its content is hidden, so the
+        // toggle below swaps the width out and remembers it for the next time. MinWidth has to
+        // go too - it wins over a width of 0 and would leave an empty strip.
+        const double panelMinWidth = 200;
+        var panelColumn = new ColumnDefinition(new GridLength(0)) { MinWidth = 0 };
+        var rememberedPanelWidth = new GridLength(280, GridUnitType.Pixel);
+
+        var splitter = new GridSplitter
+        {
+            Width = UiUtil.SplitterWidthOrHeight,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Stretch,
+        };
+        splitter.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsActorPanelVisible)) { Source = vm });
+
+        var actorPanel = ActorPanelView.Make(vm.ActorPanelViewModel);
+        actorPanel.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsActorPanelVisible)) { Source = vm });
+
+        vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName != nameof(MainViewModel.IsActorPanelVisible))
+            {
+                return;
+            }
+
+            if (vm.IsActorPanelVisible)
+            {
+                panelColumn.MinWidth = panelMinWidth;
+                panelColumn.Width = rememberedPanelWidth;
+            }
+            else
+            {
+                rememberedPanelWidth = panelColumn.Width;
+                panelColumn.MinWidth = 0;
+                panelColumn.Width = new GridLength(0);
+            }
+        };
+
+        var grid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions { contentColumn, splitterColumn, panelColumn },
+        };
+        grid.Add(vm.ContentGrid, 0, 0);
+        grid.Add(splitter, 0, 1);
+        grid.Add(actorPanel, 0, 2);
+
+        return grid;
     }
 
     /// <summary>

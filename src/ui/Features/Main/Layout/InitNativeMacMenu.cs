@@ -286,7 +286,7 @@ public static class InitNativeMacMenu
         editItems.Items.Add(Item(Clean(Se.Language.General.SelectAll), v => v.SelectAllLinesCommand));
 
         // ── Tools ─────────────────────────────────────────────────────────────
-        var actorPickerItem = Item(Clean(l.ActorPicker), v => v.ShowActorPickerCommand);
+        var actorPickerItem = Item(Clean(l.ActorPicker), v => v.ToggleActorPanelCommand);
         state.Visibilities.Add((actorPickerItem, v => v.IsFormatAssaOrSsa, [nameof(MainViewModel.IsFormatAssaOrSsa)]));
         var toolsList = new List<NativeMenuItem>
         {

@@ -11,11 +11,17 @@ public partial class ActorDisplayItem : ObservableObject
     // shortcut assigned yet (badge shown empty); otherwise the shortcut's display text.
     public string? ShortcutText { get; }
 
+    // Disables the up/down reorder arrow at either end of the list.
+    public bool IsFirst { get; }
+    public bool IsLast { get; }
+
     [ObservableProperty] private bool _isHighlighted;
 
-    public ActorDisplayItem(string name, string? shortcutText = null)
+    public ActorDisplayItem(string name, string? shortcutText, bool isFirst, bool isLast)
     {
         Name = name;
         ShortcutText = shortcutText;
+        IsFirst = isFirst;
+        IsLast = isLast;
     }
 }

@@ -1,13 +1,12 @@
 using System;
 using System.Collections.ObjectModel;
 using System.Threading.Tasks;
-using Avalonia.Controls;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
 namespace Nikse.SubtitleEdit.Features.Actors;
 
-public partial class ActorPickerViewModel : ObservableObject
+public partial class ActorPanelViewModel : ObservableObject
 {
     [ObservableProperty] private ObservableCollection<ActorDisplayItem> _actors = new();
 
@@ -15,8 +14,6 @@ public partial class ActorPickerViewModel : ObservableObject
     [ObservableProperty] private string? _highlightedActor;
 
     [ObservableProperty] private bool _isClearEnabled;
-
-    public Window? Window { get; set; }
 
     // Also called by MainViewModel after replacing Actors, since new rows start unhighlighted
     // and re-setting HighlightedActor to the same value would not trigger this on its own.
@@ -30,12 +27,15 @@ public partial class ActorPickerViewModel : ObservableObject
 
     partial void OnHighlightedActorChanged(string? value) => RefreshHighlight();
 
-    // The four delegates below are set by MainViewModel when it opens the picker, each reusing
+    // The delegates below are set by MainViewModel when it opens the picker, each reusing
     // an existing MainViewModel command instead of duplicating its logic here.
     public Action<string>? OnActorSelected { get; set; }
     public Func<Task>? OnNewActorRequested { get; set; }
     public Action? OnClearRequested { get; set; }
     public Func<string, Task>? OnRenameRequested { get; set; }
+
+    // Actor name, direction (-1 up, +1 down).
+    public Action<string, int>? OnMoveActorRequested { get; set; }
 
     [RelayCommand]
     private void SetActorByName(ActorDisplayItem? actor)
@@ -68,5 +68,23 @@ public partial class ActorPickerViewModel : ObservableObject
     private void Clear()
     {
         OnClearRequested?.Invoke();
+    }
+
+    [RelayCommand]
+    private void MoveActorUp(ActorDisplayItem? actor)
+    {
+        if (actor != null)
+        {
+            OnMoveActorRequested?.Invoke(actor.Name, -1);
+        }
+    }
+
+    [RelayCommand]
+    private void MoveActorDown(ActorDisplayItem? actor)
+    {
+        if (actor != null)
+        {
+            OnMoveActorRequested?.Invoke(actor.Name, 1);
+        }
     }
 }

@@ -571,7 +571,9 @@ public static class InitMenu
             new MenuItem
             {
                 Header = l.ActorPicker,
-                Command = vm.ShowActorPickerCommand,
+                Command = vm.ToggleActorPanelCommand,
+                ToggleType = MenuItemToggleType.CheckBox,
+                [!MenuItem.IsCheckedProperty] = new Binding(nameof(vm.IsActorPanelVisible)) { Mode = BindingMode.OneWay },
                 [!MenuItem.IsVisibleProperty] = new Binding(nameof(vm.IsFormatAssaOrSsa)),
             },
             new MenuItem
