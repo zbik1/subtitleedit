@@ -17,6 +17,8 @@ public static class ActorPanelView
     {
         var itemsControl = new ItemsControl
         {
+            // Air between the rows and the scrollbar, which has its own lane (see scrollViewer).
+            Margin = new Thickness(0, 0, 6, 0),
             // MainViewModel replaces the whole Actors collection (e.g. SyncActorPanelActors),
             // so this needs a real binding - a plain ItemsSource = vm.Actors would keep pointing
             // at the original, empty collection.
@@ -30,6 +32,7 @@ public static class ActorPanelView
                 {
                     Text = actor!.Name,
                     VerticalAlignment = VerticalAlignment.Center,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
                 };
 
                 // Null = no shortcut slot for this row (past the 10th); empty string = slot
@@ -157,6 +160,9 @@ public static class ActorPanelView
         {
             Content = itemsControl,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            // Give the scrollbar its own layout lane: as an auto-hiding overlay it is drawn
+            // on top of the content and covered the reorder arrows.
+            AllowAutoHide = false,
         };
 
         var buttonNewActor = UiUtil.MakeButton(Se.Language.General.NewDotDotDot, vm.NewActorCommand);

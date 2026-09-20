@@ -153,7 +153,7 @@ public partial class MainView : ViewBase
         // explicit width does not collapse on its own when its content is hidden, so the
         // toggle below swaps the width out and remembers it for the next time. MinWidth has to
         // go too - it wins over a width of 0 and would leave an empty strip.
-        const double panelMinWidth = 200;
+        const double panelMinWidth = 140;
         var panelColumn = new ColumnDefinition(new GridLength(0)) { MinWidth = 0 };
         var rememberedPanelWidth = new GridLength(280, GridUnitType.Pixel);
 
