@@ -83,6 +83,21 @@ public static class ActorPanelView
                             Command = vm.RenameActorCommand,
                             CommandParameter = actor,
                         },
+                        new Separator(),
+                        new MenuItem
+                        {
+                            Header = Se.Language.General.MoveToTop,
+                            Command = vm.MoveActorToTopCommand,
+                            CommandParameter = actor,
+                            IsEnabled = !actor.IsFirst,
+                        },
+                        new MenuItem
+                        {
+                            Header = Se.Language.General.MoveToBottom,
+                            Command = vm.MoveActorToBottomCommand,
+                            CommandParameter = actor,
+                            IsEnabled = !actor.IsLast,
+                        },
                     },
                 };
 

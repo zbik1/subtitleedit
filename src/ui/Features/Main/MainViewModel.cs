@@ -22207,6 +22207,7 @@ public partial class MainViewModel :
         };
         panel.OnRenameRequested = RenameActor; // also dialog-based
         panel.OnMoveActorRequested = MoveActorInOrder;
+        panel.OnMoveActorToEndRequested = MoveActorToEnd;
     }
 
     private void SyncActorPanelActors()
@@ -22235,6 +22236,24 @@ public partial class MainViewModel :
         }
 
         _actorOrder.SetOrder(new[] { order[Math.Max(index, newIndex)], order[Math.Min(index, newIndex)] });
+        SyncActorPanelActors();
+    }
+
+    // Moves actor to the very top or bottom - SetOrder accepts the whole new order in one call,
+    // so this is just a list move instead of the repeated adjacent swaps MoveActorInOrder does.
+    private void MoveActorToEnd(string actor, bool toTop)
+    {
+        var order = GetActorsInSubtitle();
+        var index = order.IndexOf(actor);
+        if (index < 0)
+        {
+            return;
+        }
+
+        order.RemoveAt(index);
+        order.Insert(toTop ? 0 : order.Count, actor);
+
+        _actorOrder.SetOrder(order);
         SyncActorPanelActors();
     }
 

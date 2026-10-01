@@ -37,6 +37,9 @@ public partial class ActorPanelViewModel : ObservableObject
     // Actor name, direction (-1 up, +1 down).
     public Action<string, int>? OnMoveActorRequested { get; set; }
 
+    // Actor name, true = move to top, false = move to bottom.
+    public Action<string, bool>? OnMoveActorToEndRequested { get; set; }
+
     [RelayCommand]
     private void SetActorByName(ActorDisplayItem? actor)
     {
@@ -85,6 +88,24 @@ public partial class ActorPanelViewModel : ObservableObject
         if (actor != null)
         {
             OnMoveActorRequested?.Invoke(actor.Name, 1);
+        }
+    }
+
+    [RelayCommand]
+    private void MoveActorToTop(ActorDisplayItem? actor)
+    {
+        if (actor != null)
+        {
+            OnMoveActorToEndRequested?.Invoke(actor.Name, true);
+        }
+    }
+
+    [RelayCommand]
+    private void MoveActorToBottom(ActorDisplayItem? actor)
+    {
+        if (actor != null)
+        {
+            OnMoveActorToEndRequested?.Invoke(actor.Name, false);
         }
     }
 }
