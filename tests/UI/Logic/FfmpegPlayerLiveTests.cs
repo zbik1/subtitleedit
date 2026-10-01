@@ -30,6 +30,15 @@ public sealed class FfmpegPlayerLiveTests : IDisposable
     /// <summary>30 fps with two of every five pictures removed: frames at 0, 33, 67, 167, 200, 233, 333 ms ...</summary>
     private static string VariableRateClip => Path.Combine(Clips(), "vfr.mkv");
 
+    /// <summary>Two audio tracks: an English "Main" default track at stream 1 and a Danish "Commentary" track at stream 2.</summary>
+    private static string TwoAudioTracksClip => Path.Combine(Clips(), "two-audio.mkv");
+
+    /// <summary>25 fps, 4 s, first time stamp at 5 s (like a clip cut from a stream), with audio.</summary>
+    private static string StartOffsetClip => Path.Combine(Clips(), "offset.mp4");
+
+    /// <summary>The same as a transport stream: the demuxer adds its own 1.4 s mux delay.</summary>
+    private static string StartOffsetTransportStream => Path.Combine(Clips(), "offset.ts");
+
     private static string Clips()
     {
         lock (ClipLock)
@@ -70,7 +79,18 @@ public sealed class FfmpegPlayerLiveTests : IDisposable
                      "-c:v libx264 -preset ultrafast -g 250 -keyint_min 250 -sc_threshold 0 -bf 3 -pix_fmt yuv420p -c:a aac -shortest cfr.mp4") &&
                  Run(ffmpeg, folder,
                      "-v error -y -f lavfi -i testsrc2=size=320x180:rate=30:duration=20 -vf select='lt(mod(n\\,5)\\,3)' " +
-                     "-c:v libx264 -preset ultrafast -g 120 -bf 2 -pix_fmt yuv420p vfr.mkv");
+                     "-c:v libx264 -preset ultrafast -g 120 -bf 2 -pix_fmt yuv420p vfr.mkv") &&
+                 Run(ffmpeg, folder,
+                     "-v error -y -f lavfi -i testsrc2=size=320x180:rate=25:duration=10 -f lavfi -i sine=frequency=440:duration=10 -f lavfi -i sine=frequency=880:duration=10 " +
+                     "-map 0:v -map 1:a -map 2:a -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac " +
+                     "-metadata:s:a:0 language=eng -metadata:s:a:0 title=Main -disposition:a:0 default " +
+                     "-metadata:s:a:1 language=dan -metadata:s:a:1 title=Commentary -disposition:a:1 0 two-audio.mkv") &&
+                 Run(ffmpeg, folder,
+                     "-v error -y -f lavfi -i testsrc2=size=320x180:rate=25:duration=4 -f lavfi -i sine=frequency=440:duration=4 " +
+                     "-c:v libx264 -preset ultrafast -bf 0 -pix_fmt yuv420p -c:a aac -output_ts_offset 5 offset.mp4") &&
+                 Run(ffmpeg, folder,
+                     "-v error -y -f lavfi -i testsrc2=size=320x180:rate=25:duration=4 -f lavfi -i sine=frequency=440:duration=4 " +
+                     "-c:v libx264 -preset ultrafast -bf 0 -pix_fmt yuv420p -c:a aac -output_ts_offset 5 offset.ts");
         if (!ok)
         {
             _clipError = $"'{ffmpeg}' could not generate the test clips (no libx264?).";
@@ -162,6 +182,58 @@ public sealed class FfmpegPlayerLiveTests : IDisposable
     {
         Assert.True(WaitFor(() => Math.Abs(_player.Position - expected) < 0.0005, 5_000),
             $"{what}: expected {expected:0.0000}, position is {_player.Position:0.0000}");
+    }
+
+    [Fact]
+    public void AudioTracks_AreListedAndSwitchable()
+    {
+        Load(TwoAudioTracksClip);
+
+        var tracks = _player.GetAudioTracks();
+
+        Assert.Equal(2, tracks.Count);
+        Assert.Equal(1, tracks[0].Id);
+        Assert.Equal(1, tracks[0].FfIndex);
+        Assert.Equal("eng", tracks[0].Language);
+        Assert.Equal("Main", tracks[0].Title);
+        Assert.Equal("aac", tracks[0].Codec);
+        Assert.True(tracks[0].IsDefault);
+        Assert.True(tracks[0].IsSelected);
+        Assert.Equal(2, tracks[1].Id);
+        Assert.Equal(2, tracks[1].FfIndex);
+        Assert.Equal("dan", tracks[1].Language);
+        Assert.Equal("Commentary", tracks[1].Title);
+        Assert.False(tracks[1].IsDefault);
+        Assert.False(tracks[1].IsSelected);
+
+        var started = Stopwatch.GetTimestamp();
+        _player.SetAudioTrack(2);
+        Assert.True(WaitFor(() => _player.HasPlaybackRestartedSince(started)), "the track switch never restarted playback");
+        tracks = _player.GetAudioTracks();
+        Assert.False(tracks[0].IsSelected);
+        Assert.True(tracks[1].IsSelected);
+
+        _player.SetAudioTrack(99); // unknown ids are ignored
+        Assert.True(_player.GetAudioTracks()[1].IsSelected);
+
+        var toggled = _player.ToggleAudioTrack();
+        Assert.NotNull(toggled);
+        Assert.Equal(1, toggled.Id);
+        Assert.True(toggled.IsSelected);
+        Assert.True(_player.GetAudioTracks()[0].IsSelected);
+    }
+
+    [Fact]
+    public void AudioTracks_SingleTrack_ListsOneAndCannotToggle()
+    {
+        Load(ConstantRateClip);
+
+        var tracks = _player.GetAudioTracks();
+
+        Assert.Single(tracks);
+        Assert.Equal(1, tracks[0].Id);
+        Assert.True(tracks[0].IsSelected);
+        Assert.Null(_player.ToggleAudioTrack());
     }
 
     [Fact]
@@ -281,6 +353,63 @@ public sealed class FfmpegPlayerLiveTests : IDisposable
 
         // 16 pictures of history per seek at this size: 40 steps are a few refills, not 40 seeks.
         Assert.InRange(_player.SeeksPerformed - seeks, 1, 3);
+    }
+
+    /// <summary>
+    /// A file whose first time stamp is not zero plays on its own time stamps, as the mpv player
+    /// does (#9828) - subtitles extracted from it are timed on them. Rebasing it to zero put every
+    /// subtitle late by the start time.
+    /// </summary>
+    [Fact]
+    public void StartOffset_PositionsAreTheFilesOwnTimeStamps()
+    {
+        var index = Load(StartOffsetClip);
+
+        var first = index.SecondsAt(0);
+        Assert.InRange(first, 4.99, 5.01);
+        AssertPosition(first, "first picture");
+        Assert.Equal(first + 99 * 0.04, _player.Duration, 1); // the end, not the length
+
+        SeekAndWait(first + 2.0);
+        AssertPosition(first + 2.0, "seek into the clip");
+
+        SeekAndWait(0);
+        AssertPosition(first, "seek before the first picture");
+    }
+
+    /// <summary>
+    /// A transport stream counts from the file's start (its earliest audio or video time stamp) -
+    /// as mpv plays it and as the subtitles read from it are timed. Its clock starts anywhere.
+    /// </summary>
+    [Fact]
+    public void StartOffset_TransportStreamCountsFromTheFileStart()
+    {
+        var index = Load(StartOffsetTransportStream);
+
+        var first = index.SecondsAt(0);
+        Assert.InRange(first, 0.0, 0.1); // the audio starts a moment before the video
+        AssertPosition(first, "first picture");
+        Assert.Equal(first + 99 * 0.04, _player.Duration, 1);
+
+        SeekAndWait(first + 2.0);
+        AssertPosition(first + 2.0, "seek into the clip");
+
+        SeekAndWait(0);
+        AssertPosition(first, "seek before the first picture");
+    }
+
+    [Fact]
+    public void StartOffset_WithoutFrameIndex_StepBackAtTheFirstFrameStaysThere()
+    {
+        _player.UseFrameIndex = false;
+        LoadWithoutIndex(StartOffsetClip);
+        var first = _player.Position;
+        Assert.InRange(first, 4.99, 5.01);
+
+        _player.StepOneFrameBack();
+        Thread.Sleep(200);
+
+        AssertPosition(first, "step back at the start");
     }
 
     [Fact]
@@ -405,6 +534,28 @@ public sealed class FfmpegPlayerLiveTests : IDisposable
         AssertPosition(index.SecondsAt(index.NearestIndex(7.0)), "seek after the storm");
         _player.StepOneFrameBack();
         AssertPosition(index.SecondsAt(index.NearestIndex(7.0) - 1), "step after the storm");
+    }
+
+    [Fact]
+    public void StepBack_AfterPlayingToTheEnd_LeavesTheEnd()
+    {
+        var index = Load(ConstantRateClip, 29.0);
+        _player.Volume = 0;
+        _player.Play();
+        Assert.True(WaitFor(() => !_player.IsPlaying && _player.Position >= _player.Duration - 0.0005, 15_000), "playback never reached the end");
+
+        _player.StepOneFrameBack();
+
+        // Position kept reporting the duration - "at the end" outlived the step - and Play then
+        // started over from 0 instead of from the frame stepped to.
+        Assert.True(WaitFor(() => _player.Position < _player.Duration - 0.02, 5_000),
+            $"position is still {_player.Position:0.0000} of {_player.Duration:0.0000}");
+        var from = _player.Position;
+        Assert.InRange(from, index.SecondsAt(index.Count - 4), index.SecondsAt(index.Count - 1));
+
+        _player.Play();
+        Assert.True(WaitFor(() => !_player.IsPlaying, 5_000), "playback from the last frames never ended");
+        Assert.True(_player.Position >= from, "Play started over from the beginning");
     }
 
     [Fact]

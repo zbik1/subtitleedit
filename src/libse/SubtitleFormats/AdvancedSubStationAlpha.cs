@@ -82,6 +82,12 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
 
         public override bool IsMine(List<string> lines, string fileName)
         {
+            if (!SubStationAlpha.HasEvents(lines))
+            {
+                Errors = null;
+                return false; // no event line, no paragraph
+            }
+
             var subtitle = new Subtitle();
 
             var all = JoinLines(lines);
@@ -105,7 +111,36 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                 return true;
             }
 
-            return false;
+            // Styles but no lines yet - a style template, an episode not subtitled yet. It is an
+            // ASSA file; opening it keeps the styles instead of "unknown format".
+            return subtitle.Paragraphs.Count == 0 && _errorCount == 0 && IsStylesOnlyScript(lines);
+        }
+
+        private static bool IsStylesOnlyScript(List<string> lines)
+        {
+            var section = string.Empty;
+            var hasScriptInfo = false;
+            var hasStyle = false;
+            var hasEventsFormat = false;
+            foreach (var line in lines)
+            {
+                var s = line.Trim();
+                if (s.StartsWith('[') && s.EndsWith(']'))
+                {
+                    section = s.ToLowerInvariant();
+                    hasScriptInfo |= section == "[script info]";
+                }
+                else if (section == "[v4+ styles]" && s.StartsWith("Style:", StringComparison.OrdinalIgnoreCase))
+                {
+                    hasStyle = true;
+                }
+                else if (section == "[events]" && s.StartsWith("Format:", StringComparison.OrdinalIgnoreCase))
+                {
+                    hasEventsFormat = true;
+                }
+            }
+
+            return hasScriptInfo && hasStyle && hasEventsFormat;
         }
 
         public static string HeaderNoStyles = @"[Script Info]
@@ -441,55 +476,22 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
 
         public static string GetHeaderAndStylesFromAdvancedSubStationAlpha(string header, List<SsaStyle> styles)
         {
-            var scriptInfo = string.Empty;
-            header = FixScriptType(header);
-
-            if (header != null &&
-                header.Contains("[Script Info]") &&
-                header.Contains("ScriptType: v4.00+"))
+            if (styles == null || styles.Count == 0)
             {
-                var sb = new StringBuilder();
-                var scriptInfoOn = false;
-                foreach (var line in header.SplitToLines())
-                {
-                    if (line.RemoveChar(' ').Contains("Styles]", StringComparison.OrdinalIgnoreCase))
-                    {
-                        break;
-                    }
+                return DefaultHeader;
+            }
 
-                    if (line.Equals("[Script Info]", StringComparison.OrdinalIgnoreCase))
-                    {
-                        scriptInfoOn = true;
-                    }
-
-                    if (scriptInfoOn)
-                    {
-                        if (line.StartsWith("ScriptType:", StringComparison.OrdinalIgnoreCase))
-                        {
-                            sb.AppendLine("ScriptType: v4.00+");
-                        }
-                        else if (line.Equals("; This is a Sub Station Alpha v4 script.", StringComparison.OrdinalIgnoreCase))
-                        {
-                            sb.AppendLine("; This is an Advanced Sub Station Alpha v4+ script.");
-                        }
-                        else
-                        {
-                            sb.AppendLine(line);
-                        }
-                    }
-                }
-                scriptInfo = sb.ToString();
+            var scriptInfo = GetScriptInfoForAssHeader(FixScriptType(header));
+            if (string.IsNullOrEmpty(scriptInfo))
+            {
+                // No [Script Info] block to carry over - keep the caller's styles under a stock one.
+                scriptInfo = GetScriptInfoForAssHeader(DefaultHeader);
             }
 
             var style = new StringBuilder();
             foreach (var ssaStyle in styles)
             {
                 style.AppendLine(ssaStyle.ToRawAss());
-            }
-
-            if (string.IsNullOrEmpty(scriptInfo) || style.Length == 0)
-            {
-                return DefaultHeader;
             }
 
             return scriptInfo.Trim() + Environment.NewLine +
@@ -499,6 +501,85 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
                    style.ToString().Trim() + Environment.NewLine +
                    Environment.NewLine +
                    "[Events]";
+        }
+
+        /// <summary>
+        /// The [Script Info] block of <paramref name="header"/> as an ASS header wants it: the
+        /// section name and ScriptType line normalised to "ScriptType: v4.00+", and that line added
+        /// when the file has none. Empty when the header has no [Script Info] section.
+        ///
+        /// Tolerant on purpose: this feeds the styles dialog's OK/Apply, and a header that did
+        /// not spell "[Script Info]" and "ScriptType: v4.00+" exactly used to be thrown away
+        /// wholesale for the stock header, taking every style in the file with it - after which
+        /// every line fell back to "Default" (#15126).
+        /// </summary>
+        private static string GetScriptInfoForAssHeader(string header)
+        {
+            if (string.IsNullOrEmpty(header))
+            {
+                return string.Empty;
+            }
+
+            var sb = new StringBuilder();
+            var scriptInfoOn = false;
+            var hasScriptType = false;
+            foreach (var line in header.SplitToLines())
+            {
+                var trimmed = line.Trim();
+                if (trimmed.RemoveChar(' ').Contains("Styles]", StringComparison.OrdinalIgnoreCase) ||
+                    trimmed.Equals("[Events]", StringComparison.OrdinalIgnoreCase) ||
+                    trimmed.Equals("[Fonts]", StringComparison.OrdinalIgnoreCase) ||
+                    trimmed.Equals("[Graphics]", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (scriptInfoOn)
+                    {
+                        break;
+                    }
+
+                    continue;
+                }
+
+                if (trimmed.Equals("[Script Info]", StringComparison.OrdinalIgnoreCase))
+                {
+                    scriptInfoOn = true;
+                    sb.AppendLine("[Script Info]");
+                    continue;
+                }
+
+                if (!scriptInfoOn)
+                {
+                    continue;
+                }
+
+                if (trimmed.StartsWith("ScriptType:", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!hasScriptType)
+                    {
+                        sb.AppendLine("ScriptType: v4.00+");
+                        hasScriptType = true;
+                    }
+                }
+                else if (trimmed.Equals("; This is a Sub Station Alpha v4 script.", StringComparison.OrdinalIgnoreCase))
+                {
+                    sb.AppendLine("; This is an Advanced Sub Station Alpha v4+ script.");
+                }
+                else
+                {
+                    sb.AppendLine(line);
+                }
+            }
+
+            if (!scriptInfoOn)
+            {
+                return string.Empty;
+            }
+
+            if (!hasScriptType)
+            {
+                sb.AppendLine("ScriptType: v4.00+");
+            }
+
+            return sb.ToString();
         }
 
         private static string FixScriptType(string header)

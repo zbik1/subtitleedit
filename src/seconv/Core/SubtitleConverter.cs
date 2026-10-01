@@ -1,5 +1,6 @@
 ﻿using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Core.SubtitleFormats;
+using Nikse.SubtitleEdit.Core.VobSub;
 using Nikse.SubtitleEdit.UiLogic.Export;
 using Nikse.SubtitleEdit.UiLogic.SpellCheck;
 using Spectre.Console;
@@ -115,6 +116,19 @@ internal class SubtitleConverter
             // GetFiles enumeration order isn't guaranteed and chunk order affects packet
             // ordering and idx timestamps, so sort up front. DVD spec caps a VTS at 9
             // chunks, so a plain ordinal sort puts VTS_xx_1..VTS_xx_9 in playback order.
+            // A DVD title set IFO (VTS_xx_0.IFO) stands for its VOB files (VTS_xx_1.VOB, ...).
+            if (inputFiles.Count == 1 && IsDvdIfo(inputFiles[0], out var titleSetVobs, out var ifoError))
+            {
+                if (ifoError != null)
+                {
+                    result.Errors.Add(ifoError);
+                    result.FailedFiles = 1;
+                    return result;
+                }
+
+                return await ConvertVobBatchAsync(titleSetVobs, options, result);
+            }
+
             if (inputFiles.All(f => f.EndsWith(".vob", StringComparison.OrdinalIgnoreCase)))
             {
                 inputFiles.Sort(StringComparer.OrdinalIgnoreCase);
@@ -154,7 +168,7 @@ internal class SubtitleConverter
                     // --translate-to rewrites the content's language, so the output name
                     // carries the target code ("way.zh-CN.srt") instead of the source
                     // track's - and a plain file no longer collides with its own input.
-                    var translateToSuffix = _translateRunner?.TargetLanguageCode;
+                    var translateToSuffix = LanguageToken(options, _translateRunner?.TargetLanguageCode);
 
                     var tracks = ContainerSubtitleLoader.TryLoadTracks(inputFile, options);
                     if (tracks is null)
@@ -195,7 +209,7 @@ internal class SubtitleConverter
 
                         foreach (var track in tracks)
                         {
-                            var outputFile = ResolveOutputFileName(inputFile, options, AppendForcedToken(translateToSuffix ?? track.LanguageCode, track.IsForced), track.TrackNumber, _usedOutputFileNames);
+                            var outputFile = ResolveOutputFileName(inputFile, options, AppendForcedToken(translateToSuffix ?? LanguageToken(options, track.LanguageCode), track.IsForced), track.TrackNumber, _usedOutputFileNames);
                             var trackLabel = track.TrackNumber.HasValue ? $"#{track.TrackNumber.Value} " : string.Empty;
                             var langLabel = string.IsNullOrEmpty(track.LanguageCode) ? string.Empty : $"[{track.LanguageCode}] ";
                             if (!options.Quiet)
@@ -243,6 +257,36 @@ internal class SubtitleConverter
     /// containers, so the regular text-loading path used to error with
     /// "input file too large". This bypasses it.
     /// </summary>
+    /// <summary>
+    /// True for a DVD IFO file; <paramref name="vobFiles"/> gets its title set's VOB files, or
+    /// <paramref name="error"/> says why there are none.
+    /// </summary>
+    private static bool IsDvdIfo(string fileName, out List<string> vobFiles, out string? error)
+    {
+        vobFiles = [];
+        error = null;
+        var ext = Path.GetExtension(fileName).ToLowerInvariant();
+        if (ext is not (".ifo" or ".bup") || !IfoParser.IsIfo(fileName))
+        {
+            return false;
+        }
+
+        var ifo = new IfoParser(fileName);
+        if (ifo.Type != IfoParser.IfoType.VideoTitleSet)
+        {
+            error = $"{Path.GetFileName(fileName)} is the disc menu IFO - use a title set IFO (VTS_xx_0.IFO) instead.";
+            return true;
+        }
+
+        vobFiles = IfoParser.GetTitleVobFiles(Path.ChangeExtension(fileName, ".IFO"));
+        if (vobFiles.Count == 0)
+        {
+            error = $"No VOB files (VTS_xx_1.VOB, ...) found next to {Path.GetFileName(fileName)}.";
+        }
+
+        return true;
+    }
+
     private async Task<ConversionResult> ConvertVobBatchAsync(List<string> vobFiles, ConversionOptions options, ConversionResult result)
     {
         if (!"vobsub".Equals(options.Format, StringComparison.OrdinalIgnoreCase))
@@ -321,10 +365,28 @@ internal class SubtitleConverter
 
         try
         {
-            // IsPal — there's no single reliable auto-detect from VOB alone (would need
-            // IFO parsing). Default to PAL to match the GUI's batch converter. Future
-            // work: add --vob-pal/--vob-ntsc and/or read VIDEO_TS.IFO.
-            var outputs = VobSubExtractor.Extract(vobFiles, outputBase, isPal: true);
+            // PAL/NTSC, palette and languages come from the title set's IFO when it is next to
+            // the VOBs (else PAL); --track-number picks the DVD title (program chain).
+            if (options.TrackNumbers.Count > 1)
+            {
+                throw new InvalidOperationException("--track-number takes one DVD title number for VOB/IFO input.");
+            }
+
+            int? dvdTitleNumber = options.TrackNumbers.Count == 1 ? options.TrackNumbers[0] : null;
+            var extraction = VobSubExtractor.Extract(vobFiles, outputBase, dvdTitleNumber);
+            var outputs = extraction.Outputs;
+            if (!options.Quiet)
+            {
+                AnsiConsole.MarkupInterpolated($" [dim]({extraction.Source})[/]");
+            }
+
+            // SE does not decrypt CSS - a VOB copied without decrypting gives garbled images
+            if (extraction.EncryptedPacks > 0)
+            {
+                var warning = $"{extraction.EncryptedPacks} of {extraction.TotalPacks} subtitle packets are still CSS encrypted - the VOB files were copied without decrypting, so some subtitle images are garbled. Decrypt the DVD with a DVD ripping tool first.";
+                result.Warnings.Add(warning); // listed in the summary at the end
+            }
+
             result.SuccessfulFiles = vobFiles.Count;
             // Report the first stream's output path against each input VOB. With multiple
             // streams there's no clean 1:1 mapping back to inputs, but the OutputFile slot
@@ -392,6 +454,18 @@ internal class SubtitleConverter
 
         if (ext == ".sup")
         {
+            if (HdDvdSupParser.IsHdDvdSup(inputFile))
+            {
+                return await PassThroughSingleStreamAsync(inputFile, options, result, fileIndex, sourceTimestamps,
+                    () => BitmapSubtitleLoader.LoadHdDvdSup(inputFile));
+            }
+
+            if (FileUtil.IsSpDvdSup(inputFile))
+            {
+                return await PassThroughSingleStreamAsync(inputFile, options, result, fileIndex, sourceTimestamps,
+                    () => BitmapSubtitleLoader.LoadSpDvdSup(inputFile));
+            }
+
             return await PassThroughSingleStreamAsync(inputFile, options, result, fileIndex, sourceTimestamps,
                 () => BitmapSubtitleLoader.LoadBluRaySup(inputFile));
         }
@@ -438,12 +512,14 @@ internal class SubtitleConverter
                 () => BitmapSubtitleLoader.LoadVobSub(subPath, inputFile, isPal: true));
         }
 
-        if (ext is ".mkv" or ".mks")
+        // e.g. an HLS web rip named .mp4 - before the Matroska branch, as it could be named .mkv too
+        var isTransportStreamWithOtherExtension = FileUtil.IsTransportStreamWithOtherVideoExtension(inputFile);
+        if (ext is ".mkv" or ".mks" && !isTransportStreamWithOtherExtension)
         {
             return await PassThroughMatroskaPgsAsync(inputFile, options, result, fileIndex, sourceTimestamps);
         }
 
-        if (ext is ".ts" or ".m2ts" or ".mts")
+        if (ext is ".ts" or ".m2ts" or ".mts" || isTransportStreamWithOtherExtension)
         {
             return await PassThroughTransportStreamDvbAsync(inputFile, options, result, fileIndex, sourceTimestamps);
         }
@@ -518,12 +594,13 @@ internal class SubtitleConverter
             return false;
         }
 
-        // Both bitmap track kinds are eligible for image-to-image: PGS, and VobSub (whose
+        // Every bitmap track kind is eligible for image-to-image: PGS, VobSub (whose
         // subpictures previously fell through to the OCR pipeline and were re-rasterised as
-        // text at the default font — issue #12772 part 3).
+        // text at the default font — issue #12772 part 3) and DVB-sub, which did the same.
         var bitmapTracks = matroska.GetTracks(true)
             .Where(t => t.CodecId.Equals("S_HDMV/PGS", StringComparison.OrdinalIgnoreCase)
-                        || t.CodecId.Equals("S_VOBSUB", StringComparison.OrdinalIgnoreCase))
+                        || t.CodecId.Equals("S_VOBSUB", StringComparison.OrdinalIgnoreCase)
+                        || t.CodecId.Equals("S_DVBSUB", StringComparison.OrdinalIgnoreCase))
             .Where(t => !options.ForcedOnly || t.IsForced)
             .Where(t => options.TrackNumbers.Count == 0 || options.TrackNumbers.Contains(t.TrackNumber))
             .ToList();
@@ -544,21 +621,22 @@ internal class SubtitleConverter
         foreach (var track in bitmapTracks)
         {
             var isVobSub = track.CodecId.Equals("S_VOBSUB", StringComparison.OrdinalIgnoreCase);
+            var isDvbSub = track.CodecId.Equals("S_DVBSUB", StringComparison.OrdinalIgnoreCase);
             var outputFile = ResolveOutputFileName(
-                inputFile, options, AppendForcedToken(ContainerSubtitleLoader.SanitizeLang(track.Language), track.IsForced), track.TrackNumber, _usedOutputFileNames);
+                inputFile, options, AppendForcedToken(LanguageToken(options, ContainerSubtitleLoader.SanitizeLang(track.Language)), track.IsForced), track.TrackNumber, _usedOutputFileNames);
 
             if (!options.Quiet)
             {
                 var trackLabel = $"#{track.TrackNumber} ";
-                var kind = isVobSub ? "VobSub" : "PGS";
+                var kind = isVobSub ? "VobSub" : isDvbSub ? "DVB" : "PGS";
                 AnsiConsole.MarkupInterpolated($"[dim]{fileIndex}:[/] [cyan]{Path.GetFileName(inputFile)}[/] [yellow]{trackLabel}[/][dim]({kind} img→img)→[/] [green]{outputFile}[/]...");
             }
 
             IReadOnlyList<BitmapSubtitleLoader.BitmapSubtitleItem>? items = null;
             try
             {
-                items = isVobSub
-                    ? BitmapSubtitleLoader.LoadMatroskaVobSub(matroska, track)
+                items = isVobSub ? BitmapSubtitleLoader.LoadMatroskaVobSub(matroska, track)
+                    : isDvbSub ? BitmapSubtitleLoader.LoadMatroskaDvbSub(matroska, track)
                     : BitmapSubtitleLoader.LoadMatroskaPgs(matroska, track);
                 WritePreservedBitmaps(items, outputFile, options);
                 result.SuccessfulFiles++;
@@ -991,7 +1069,7 @@ internal class SubtitleConverter
             // fall back to the dictionaries bundled into seconv (English out of the box) (#11744).
             SpellCheckConfig.DictionariesFolder = () =>
                 !string.IsNullOrEmpty(options.DictionaryFolder) ? options.DictionaryFolder : BundledDictionaries.GetFolder();
-            SpellCheckConfig.UseWordSplitList = () => true;
+            SpellCheckConfig.UseWordSplitList = () => Configuration.Settings.Tools.OcrUseWordSplitList;
             SpellCheckConfig.TreatInApostropheAsIng = () => false;
 
             LibSEIntegration.ApplyOperations(
@@ -1034,6 +1112,16 @@ internal class SubtitleConverter
     }
 
     /// <summary>
+    /// The language part of an output name, or null with --no-language-suffix (#15156).
+    /// Only the language is dropped: the "forced" token and stream labels (dvb_pid,
+    /// xsub_track) still tell same-language outputs apart.
+    /// </summary>
+    internal static string? LanguageToken(ConversionOptions options, string? language)
+    {
+        return options.NoLanguageSuffix ? null : language;
+    }
+
+    /// <summary>
     /// Appends the player convention's "forced" name token (<c>movie.eng.forced.srt</c>)
     /// for forced tracks - MKV forced-display flag, or MP4 tx3g forced displayFlags -
     /// so a forced track no longer collides with its same-language full track.
@@ -1057,6 +1145,9 @@ internal class SubtitleConverter
     /// A name in <paramref name="usedNames"/> was handed out earlier in this run (e.g.
     /// the first of two "eng" tracks) and always counts as taken - --overwrite only
     /// clobbers files from before the run, never the run's own output.
+    /// --no-language-suffix is applied by the callers (<see cref="LanguageToken"/>), so
+    /// with --overwrite a --translate-to run writes back to the input's own name (#15156),
+    /// without it the counter keeps the input safe.
     /// </summary>
     internal static string ResolveOutputFileName(
         string inputFile,
@@ -1176,6 +1267,12 @@ internal record class ConversionOptions
     public double? TargetFps { get; init; }
     public bool Overwrite { get; init; }
 
+    /// <summary>
+    /// --no-language-suffix: never insert a language code (translation target or container
+    /// track language) between the output stem and its extension.
+    /// </summary>
+    public bool NoLanguageSuffix { get; init; }
+
     /// <summary>--keep-timestamp: copy the source file's creation/last-write time onto every output file.</summary>
     public bool KeepTimestamp { get; init; }
     public List<string> Operations { get; init; } = new();
@@ -1226,6 +1323,9 @@ internal record class ConversionOptions
     public string? OutputFilenameAppend { get; init; }
     public string? AssaStyleFile { get; init; }
     public int? PacCodePage { get; init; }
+
+    /// <summary>PAC code page for lines in another script, written flagged as "secondary code page".</summary>
+    public int? PacSecondaryCodePage { get; init; }
     public string? EbuHeaderFile { get; init; }
     public string? MultipleReplaceFile { get; init; }
     public string? CustomFormatFile { get; init; }
@@ -1276,6 +1376,14 @@ internal record class ConversionOptions
     /// <see cref="TimeCodesOnly"/> mode.
     /// </summary>
     public bool PgsIsolateColors { get; init; } = true;
+
+    /// <summary>
+    /// OCR only: prefix each recognised text with the ASSA alignment tag (<c>{\an8}</c>, ...)
+    /// matching where its image sits in the video frame - the OCR window's "Auto-detect ASSA
+    /// alignment". Bottom-centre (an2) is the default and gets no tag. Sources that do not
+    /// report a frame size are left untagged. Ignored in <see cref="TimeCodesOnly"/> mode.
+    /// </summary>
+    public bool OcrAutoDetectAssaAlignment { get; init; }
 
     /// <summary>Ollama API endpoint (default <c>http://localhost:11434/api/chat</c>).</summary>
     public string? OllamaUrl { get; init; }

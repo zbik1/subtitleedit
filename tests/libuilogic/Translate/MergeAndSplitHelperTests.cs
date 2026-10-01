@@ -69,6 +69,49 @@ public class MergeAndSplitHelperTests
         Assert.Equal(count, rowsWithText);
     }
 
+    private sealed class EchoTranslator : IAutoTranslator
+    {
+        public string Name => "Echo";
+        public string Url => "https://example.com";
+        public string Error { get; set; } = string.Empty;
+        public int MaxCharacters => 1500;
+        public void Initialize() { }
+        public List<TranslationPair> GetSupportedSourceLanguages() => new();
+        public List<TranslationPair> GetSupportedTargetLanguages() => new();
+        public Task<string> Translate(string text, string sourceLanguageCode, string targetLanguageCode, CancellationToken cancellationToken) => Task.FromResult(text);
+    }
+
+    // Rows are merged into one request as long as they fit, however many that is - also past the
+    // first rows looked at, which are only a window that grows while the merge keeps going.
+    [Theory]
+    [InlineData(10)]
+    [InlineData(64)]
+    [InlineData(65)]
+    [InlineData(200)]
+    [InlineData(1000)]
+    public async Task MergeAndTranslateIfPossible_MergesAsManyRowsAsFit(int rowCount)
+    {
+        MergeAndSplitHelper.MergeSplitProblems = false;
+        var maxChars = Math.Min(1500, Configuration.Settings.Tools.AutoTranslateMaxBytes);
+        var rowsThatFit = 1 + (maxChars - 3) / (Utilities.UrlEncodeLength(Environment.NewLine) + 3);
+        var expected = Math.Min(rowCount, rowsThatFit);
+        Assert.True(rowsThatFit > 64);
+        var rows = MakeRows(Enumerable.Range(0, rowCount).Select(_ => "Hi.").ToArray());
+
+        var count = await MergeAndSplitHelper.MergeAndTranslateIfPossible(
+            rows,
+            new TranslationPair("English", "en"),
+            new TranslationPair("Danish", "da"),
+            0,
+            new EchoTranslator(),
+            forceSingleLineMode: false,
+            CancellationToken.None);
+
+        Assert.Equal(expected, count);
+        Assert.All(rows.Take(expected), r => Assert.Equal("Hi.", r.TranslatedText));
+        Assert.All(rows.Skip(expected), r => Assert.True(string.IsNullOrEmpty(r.TranslatedText)));
+    }
+
     // Issue #14230: two lines are merged and translated as one sentence, and the reply contains
     // a clock time written with a period ("04.00 uur") where the English source had a colon
     // ("4:00am"). The split back over the two rows must not mistake that period for the end of
@@ -98,6 +141,68 @@ public class MergeAndSplitHelperTests
 
     // Issue #14484: "Frau Meier." comes back as "Mrs. Meier." - one period more than the source.
     // The split must not cut that row off at "Mrs." and shift every later row by a sentence.
+    [Theory]
+    [InlineData("♪ Heard there was a secret chord ♪", true)]
+    [InlineData("<i>♪ That David played\nAnd it pleased the Lord ♪</i>", true)]
+    [InlineData("{\\an8}♫ La la la ♫", true)]
+    [InlineData("♪♪", true)]
+    [InlineData("♪ Still singing", false)]
+    [InlineData("- ♪ La la ♪\n- Hello!", false)]
+    [InlineData("Hello ♪ there", false)]
+    [InlineData("", false)]
+    public void IsMusicLine(string text, bool expected)
+    {
+        Assert.Equal(expected, MergeAndSplitHelper.IsMusicLine(text));
+    }
+
+    // Issue #9969: with the setting on, lyrics are copied as-is and never sent to the engine,
+    // and a merged request stops before them.
+    [Fact]
+    public async Task MergeAndTranslateIfPossible_KeepMusicLines_CopiesLyricsAndStopsMergeBeforeThem()
+    {
+        var previous = Configuration.Settings.Tools.AutoTranslateKeepMusicLines;
+        Configuration.Settings.Tools.AutoTranslateKeepMusicLines = true;
+        try
+        {
+            var rows = MakeRows("Hello there.", "<i>♪ Secret chord ♪</i>", "Goodbye.");
+            var translator = new FixedResultTranslator { Result = "Hej der." };
+
+            var count = await MergeAndSplitHelper.MergeAndTranslateIfPossible(rows, new TranslationPair("English", "en"), new TranslationPair("Danish", "da"), 0, translator, false, CancellationToken.None);
+            Assert.Equal(1, count);
+            Assert.Equal("Hej der.", rows[0].TranslatedText);
+
+            translator.Result = "should not be used";
+            count = await MergeAndSplitHelper.MergeAndTranslateIfPossible(rows, new TranslationPair("English", "en"), new TranslationPair("Danish", "da"), 1, translator, false, CancellationToken.None);
+            Assert.Equal(1, count);
+            Assert.Equal("<i>♪ Secret chord ♪</i>", rows[1].TranslatedText);
+        }
+        finally
+        {
+            Configuration.Settings.Tools.AutoTranslateKeepMusicLines = previous;
+        }
+    }
+
+    [Fact]
+    public async Task MergeAndTranslateIfPossible_KeepMusicLinesOff_TranslatesLyrics()
+    {
+        var previous = Configuration.Settings.Tools.AutoTranslateKeepMusicLines;
+        Configuration.Settings.Tools.AutoTranslateKeepMusicLines = false;
+        try
+        {
+            var rows = MakeRows("♪ Secret chord ♪");
+            var translator = new FixedResultTranslator { Result = "♪ Hemmelig akkord ♪" };
+
+            var count = await MergeAndSplitHelper.MergeAndTranslateIfPossible(rows, new TranslationPair("English", "en"), new TranslationPair("Danish", "da"), 0, translator, false, CancellationToken.None);
+
+            Assert.Equal(1, count);
+            Assert.Equal("♪ Hemmelig akkord ♪", rows[0].TranslatedText);
+        }
+        finally
+        {
+            Configuration.Settings.Tools.AutoTranslateKeepMusicLines = previous;
+        }
+    }
+
     private sealed class FixedAbbreviations : IDisposable
     {
         private readonly Func<string, HashSet<string>> _previous = MergeAndSplitHelper.AbbreviationsForLanguage;

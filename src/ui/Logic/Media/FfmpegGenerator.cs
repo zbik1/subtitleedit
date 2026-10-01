@@ -132,6 +132,25 @@ public class FfmpegGenerator
     /// <summary>
     /// Generate ffmpeg parameters for a video with a burned-in Advanced Sub Station Alpha subtitle.
     /// </summary>
+    /// <summary>
+    /// Logo X/Y/Size are picked against one resolution (<see cref="Features.Video.BurnIn.BurnInLogo.ReferenceWidth"/>),
+    /// but a batch job with "source resolution" renders each video at its own size - unscaled, a
+    /// top-right logo on a smaller video lands outside the frame and silently disappears.
+    /// </summary>
+    internal static (int X, int Y, double SizePercent) ScaleLogoToOutput(Features.Video.BurnIn.BurnInLogo logo, int width, int height)
+    {
+        if (logo.ReferenceWidth <= 0 || logo.ReferenceHeight <= 0 || width <= 0 || height <= 0 ||
+            (logo.ReferenceWidth == width && logo.ReferenceHeight == height))
+        {
+            return (logo.X, logo.Y, logo.Size);
+        }
+
+        var factorX = (double)width / logo.ReferenceWidth;
+        var factorY = (double)height / logo.ReferenceHeight;
+        var sizePercent = Math.Round(logo.Size * Math.Min(factorX, factorY), 2);
+        return ((int)Math.Round(logo.X * factorX), (int)Math.Round(logo.Y * factorY), sizePercent);
+    }
+
     public static string GenerateHardcodedVideoFile(string inputVideoFileName, string assaSubtitleFileName, string outputVideoFileName, int width, int height, string videoEncoding, string preset, string pixelFormat, string crf, string audioEncoding, bool forceStereo, string sampleRate, string tune, string audioBitRate, string pass, string twoPassBitRate, string? cutStart = null, string? cutEnd = null, string audioCutTrack = "", Features.Video.BurnIn.BurnInLogo? burnInLogo = null, bool inputIsAudioOnly = false, bool subtitleIsImage = false, Export3DMode mode3D = Export3DMode.None, int depth3D = 0)
     {
         if (width % 2 == 1)
@@ -379,7 +398,8 @@ public class FfmpegGenerator
 
             // Convert alpha percentage (0-100) to 0.0-1.0
             var alphaValue = (burnInLogo.Alpha / 100.0).ToString(CultureInfo.InvariantCulture);
-            var sizePercent = burnInLogo.Size.ToString(CultureInfo.InvariantCulture);
+            var (logoX, logoY, logoSize) = ScaleLogoToOutput(burnInLogo, width, height);
+            var sizePercent = logoSize.ToString(CultureInfo.InvariantCulture);
 
             // Build filter_complex for video with logo overlay
             // 1. Scale main video (or the generated canvas for audio-only input) and apply subtitles
@@ -387,7 +407,7 @@ public class FfmpegGenerator
             // 3. Overlay logo at specified X, Y position
             var filterComplex = $"{withSubtitles}[withsubs];" +
                                $"{logoVideoStream}scale=iw*{sizePercent}/100:ih*{sizePercent}/100,format=rgba,colorchannelmixer=aa={alphaValue}[logo];" +
-                               $"[withsubs][logo]overlay={burnInLogo.X}:{burnInLogo.Y}";
+                               $"[withsubs][logo]overlay={logoX}:{logoY}";
 
             filterParameter = $"-filter_complex \"{filterComplex}\"";
         }
@@ -1501,7 +1521,10 @@ public class FfmpegGenerator
             StartInfo =
             {
                 FileName = GetFfmpegLocation(),
-                Arguments = $"-i \"{inputVideoFileName}\" -vf select='eq(pict_type\\,I)',showinfo -f null -",
+                // -skip_frame nokey: only key frames are decoded (and no audio at all) - decoding every
+                // frame of the whole file just to throw all but the I-frames away kept a core
+                // pegged for as long as the video plays, from the moment the dialog opened.
+                Arguments = $"-skip_frame nokey -i \"{inputVideoFileName}\" -an -sn -dn -vf select='eq(pict_type\\,I)',showinfo -f null -",
                 UseShellExecute = false,
                 RedirectStandardError = true,
                 RedirectStandardOutput = false,
@@ -1520,13 +1543,19 @@ public class FfmpegGenerator
     string outputFileName,
     List<SubtitleLineViewModel> segments,
     bool hasVideo,
-    bool hasAudio = true)
+    bool hasAudio = true,
+    CutVideoTransitionOptions? transitions = null,
+    string videoEncoding = DefaultCutVideoEncoding)
     {
-        var ranges = segments
+        return GetCutParameters(inputFileName, outputFileName, GetMergeRanges(segments), hasVideo, hasAudio, transitions, videoEncoding);
+    }
+
+    /// <summary>The ranges "merge segments" keeps: the segments themselves, in the order given.</summary>
+    public static List<(double? Start, double? End)> GetMergeRanges(List<SubtitleLineViewModel> segments)
+    {
+        return segments
             .Select(s => (Start: (double?)s.StartTime.TotalSeconds, End: (double?)s.EndTime.TotalSeconds))
             .ToList();
-
-        return GetConcatSegmentsParameters(inputFileName, outputFileName, ranges, hasVideo, hasAudio);
     }
 
     public static string GetRemoveSegmentsParameters(
@@ -1534,7 +1563,18 @@ public class FfmpegGenerator
     string outputFileName,
     List<SubtitleLineViewModel> segments,
     bool hasVideo,
-    bool hasAudio = true)
+    bool hasAudio = true,
+    CutVideoTransitionOptions? transitions = null,
+    string videoEncoding = DefaultCutVideoEncoding)
+    {
+        return GetCutParameters(inputFileName, outputFileName, GetRemoveRanges(segments), hasVideo, hasAudio, transitions, videoEncoding);
+    }
+
+    /// <summary>
+    /// The ranges "cut segments" keeps: everything between the segments (sorted by start) and
+    /// the rest of the file after the last one - that last range has no end.
+    /// </summary>
+    public static List<(double? Start, double? End)> GetRemoveRanges(List<SubtitleLineViewModel> segments)
     {
         var ranges = new List<(double? Start, double? End)>();
         double lastEnd = 0;
@@ -1556,20 +1596,104 @@ public class FfmpegGenerator
         // Keep remainder (from lastEnd → EOF)
         ranges.Add((lastEnd, null));
 
-        return GetConcatSegmentsParameters(inputFileName, outputFileName, ranges, hasVideo, hasAudio);
+        return ranges;
     }
 
     /// <summary>
-    /// The trim + concat command line shared by "merge segments" and "remove segments": every
+    /// A short clip of one join with its transition, for previewing: the last
+    /// <paramref name="secondsAround"/> seconds (plus the transition) of the range before the join
+    /// and the first ones of the range after it.
+    /// </summary>
+    public static string GetCutTransitionPreviewParameters(
+        string inputFileName,
+        string outputFileName,
+        (double Start, double? End) before,
+        (double Start, double? End) after,
+        double secondsAround,
+        bool hasVideo,
+        bool hasAudio,
+        CutVideoTransitionOptions transitions)
+    {
+        var beforeEnd = before.End ?? before.Start;
+        var margin = Math.Max(0, transitions.TransitionSeconds) + secondsAround;
+        var ranges = new List<(double? Start, double? End)>
+        {
+            (Math.Max(before.Start, beforeEnd - margin), beforeEnd),
+            (after.Start, after.End.HasValue ? Math.Min(after.End.Value, after.Start + margin) : after.Start + margin),
+        };
+
+        var previewOptions = new CutVideoTransitionOptions
+        {
+            Transition = transitions.Transition,
+            TransitionSeconds = transitions.TransitionSeconds,
+            FrameRate = transitions.FrameRate,
+            InputDurationSeconds = transitions.InputDurationSeconds,
+        };
+
+        return GetCutParameters(inputFileName, outputFileName, ranges, hasVideo, hasAudio, previewOptions, DefaultCutVideoEncoding);
+    }
+
+    private static string GetCutParameters(
+        string inputFileName,
+        string outputFileName,
+        List<(double? Start, double? End)> ranges,
+        bool hasVideo,
+        bool hasAudio,
+        CutVideoTransitionOptions? transitions,
+        string videoEncoding)
+    {
+        if (transitions is { UsesPlan: true })
+        {
+            var plan = CutVideoTransitionPlan.Create(ranges, transitions);
+            if (plan.Ranges.Count > 0)
+            {
+                return GetTransitionSegmentsParameters(inputFileName, outputFileName, plan, hasVideo, hasAudio, videoEncoding);
+            }
+        }
+
+        return GetConcatSegmentsParameters(inputFileName, outputFileName, ranges, hasVideo, hasAudio, videoEncoding);
+    }
+
+    /// <summary>
+    /// More ranges than this are cut from one input instead of one seeked input per range - every
+    /// input is its own demuxer and decoder, and a list of hundreds of lines should not open the
+    /// video hundreds of times.
+    /// </summary>
+    private const int MaxSeekedCutInputs = 32;
+
+    /// <summary>
+    /// Inputs without a seek index are opened this many seconds before a range and trimmed to it exactly. A .ts, .m2ts,
+    /// .mpg or .vob has no seek index, so "-ss" there lands on a frame that is not a keyframe and
+    /// the decoder drops pictures up to the next keyframe - the picture started up to a GOP late
+    /// and ahead of the sound. Starting a little earlier gives the decoder a keyframe before the
+    /// range.
+    /// </summary>
+    private const double CutSeekPreroll = 15.0;
+
+    private static double GetCutSeekPreroll(string inputFileName)
+    {
+        var ext = Path.GetExtension(inputFileName).ToLowerInvariant();
+        return ext is ".ts" or ".m2ts" or ".mts" or ".m2t" or ".tp" or ".trp" or ".mpg" or ".mpeg" or ".m2p" or ".vob" or ".m2v" or ".mpv"
+            ? CutSeekPreroll
+            : 0;
+    }
+
+    /// <summary>
+    /// The seek + concat command line shared by "merge segments" and "remove segments": every
     /// range is cut out of the input and the pieces are joined in the order given. A range
     /// without an end runs to the end of the file.
+    /// Each range is its own input, opened with -ss/-t, so ffmpeg jumps to the range instead of
+    /// decoding the video from the very beginning - a trim filter on one input decoded (and
+    /// threw away) everything before a range, so a ten second clip from late in a long film
+    /// took minutes at full CPU. Input seeking while transcoding is frame accurate.
     /// </summary>
     private static string GetConcatSegmentsParameters(
         string inputFileName,
         string outputFileName,
         List<(double? Start, double? End)> ranges,
         bool hasVideo,
-        bool hasAudio)
+        bool hasAudio,
+        string videoEncoding)
     {
         // The graph used to reference "[0:a]" no matter what, so a video without an audio track
         // (a screen recording, a blank video made here) failed with "Stream specifier ':a' ...
@@ -1579,27 +1703,64 @@ public class FfmpegGenerator
             hasAudio = true;
         }
 
+        var inv = CultureInfo.InvariantCulture;
+        string F(double value) => value.ToString(inv);
+
+        var inputArgs = string.Empty;
         var filterParts = new List<string>();
         var concatInputs = new List<string>();
+        var seekPerRange = ranges.Count <= MaxSeekedCutInputs;
+        var preroll = GetCutSeekPreroll(inputFileName);
+
+        // One shared input: seek to the earliest range and stop after the latest, and trim
+        // relative to that window.
+        var windowStart = 0.0;
+        if (!seekPerRange)
+        {
+            windowStart = Math.Max(0, ranges.Min(r => r.Start.GetValueOrDefault()) - preroll);
+            var windowEnd = ranges.All(r => r.End.HasValue) ? ranges.Max(r => r.End!.Value) : (double?)null;
+            inputArgs = GetSeekInputArgs(inputFileName, windowStart, windowEnd, F);
+        }
 
         for (var i = 0; i < ranges.Count; i++)
         {
-            var trim = "start=" + ranges[i].Start.GetValueOrDefault().ToString(CultureInfo.InvariantCulture);
-            if (ranges[i].End.HasValue)
+            var start = ranges[i].Start.GetValueOrDefault();
+            var end = ranges[i].End;
+            var input = 0;
+            var seekStart = windowStart;
+            if (seekPerRange)
             {
-                trim += ":end=" + ranges[i].End!.Value.ToString(CultureInfo.InvariantCulture);
+                input = i;
+                seekStart = Math.Max(0, start - preroll);
+                inputArgs += GetSeekInputArgs(inputFileName, seekStart, end, F);
+            }
+
+            // A per-range input opened exactly at the range needs no trim (-t ends it).
+            var filter = string.Empty;
+            if (!seekPerRange || start > seekStart)
+            {
+                filter = "start=" + F(start - seekStart);
+            }
+
+            if (end.HasValue && (!seekPerRange || filter.Length > 0))
+            {
+                filter += (filter.Length > 0 ? ":" : string.Empty) + "end=" + F(end.Value - seekStart);
             }
 
             var labels = string.Empty;
             if (hasVideo)
             {
-                filterParts.Add($"[0:v]trim={trim},setpts=PTS-STARTPTS[v{i}]");
+                filterParts.Add(filter.Length > 0
+                    ? $"[{input}:v]trim={filter},setpts=PTS-STARTPTS[v{i}]"
+                    : $"[{input}:v]setpts=PTS-STARTPTS[v{i}]");
                 labels += $"[v{i}]";
             }
 
             if (hasAudio)
             {
-                filterParts.Add($"[0:a]atrim={trim},asetpts=PTS-STARTPTS[a{i}]");
+                filterParts.Add(filter.Length > 0
+                    ? $"[{input}:a]atrim={filter},asetpts=PTS-STARTPTS[a{i}]"
+                    : $"[{input}:a]asetpts=PTS-STARTPTS[a{i}]");
                 labels += $"[a{i}]";
             }
 
@@ -1611,8 +1772,160 @@ public class FfmpegGenerator
                             string.Join("", concatInputs) +
                             $"concat=n={ranges.Count}:v={(hasVideo ? 1 : 0)}:a={(hasAudio ? 1 : 0)}{outputLabels}";
 
+        return GetCutEncodingParameters(inputArgs, outputFileName, filterComplex, hasVideo, hasAudio, videoEncoding);
+    }
+
+    private static string GetSeekInputArgs(string inputFileName, double start, double? end, Func<double, string> format)
+    {
+        var args = string.Empty;
+        if (start > 0)
+        {
+            args += $"-ss {format(start)} ";
+        }
+
+        if (end.HasValue)
+        {
+            args += $"-t {format(Math.Max(0, end.Value - start))} ";
+        }
+
+        return args + $"-i \"{inputFileName}\" ";
+    }
+
+    /// <summary>
+    /// "Cut video" with effects: the kept ranges are joined with xfade (video) and acrossfade
+    /// (audio) instead of concat, and faded in/out at the ends. Each transition overlaps the two
+    /// ranges it joins, so the output is one transition shorter per join. The ranges come from a
+    /// <see cref="CutVideoTransitionPlan"/>, which puts them on whole frames - the xfade offsets
+    /// are the running output length, and must be what the trims really produce.
+    /// </summary>
+    private static string GetTransitionSegmentsParameters(
+        string inputFileName,
+        string outputFileName,
+        CutVideoTransitionPlan plan,
+        bool hasVideo,
+        bool hasAudio,
+        string videoEncoding)
+    {
+        if (!hasVideo && !hasAudio)
+        {
+            hasAudio = true;
+        }
+
+        var inv = CultureInfo.InvariantCulture;
+        string F(double value) => value.ToString("0.######", inv);
+
+        var ranges = plan.Ranges;
+        var halfFrame = plan.FrameRate > 0 ? 0.5 / plan.FrameRate : 0;
+        var transition = plan.TransitionSeconds;
+        var filterParts = new List<string>();
+
+        for (var i = 0; i < ranges.Count; i++)
+        {
+            var (start, end) = ranges[i];
+            if (hasVideo)
+            {
+                // The input is made constant rate BEFORE trimming, starting at 0: a source that
+                // holds a picture (the first frame shown for 1.6 s, a still, variable frame rate)
+                // has no frames inside the hold, so trimming first dropped the held picture and
+                // setpts closed the gap - the leg came out seconds short, every xfade offset after
+                // it was wrong and the video ended early while the audio played on. Constant rate
+                // is also what xfade requires ("The inputs needs to be a constant frame rate").
+                // Video then trims half a frame early, so the frame sitting exactly on a boundary
+                // is kept at the start and dropped at the end whatever its rounded timestamp - the
+                // range is exactly (end - start) * fps frames, as the audio is samples.
+                var videoTrim = "start=" + F(Math.Max(0, start - halfFrame));
+                if (end.HasValue)
+                {
+                    videoTrim += ":end=" + F(Math.Max(0, end.Value - halfFrame));
+                }
+
+                var fps = string.IsNullOrEmpty(plan.FrameRateExpression) ? string.Empty : $"fps={plan.FrameRateExpression}:start_time=0,";
+                filterParts.Add($"[0:v]{fps}trim={videoTrim},setpts=PTS-STARTPTS,settb=AVTB,format=yuv420p[v{i}]");
+            }
+
+            if (hasAudio)
+            {
+                var audioTrim = "start=" + F(start);
+                if (end.HasValue)
+                {
+                    audioTrim += ":end=" + F(end.Value);
+                }
+
+                filterParts.Add($"[0:a]atrim={audioTrim},asetpts=PTS-STARTPTS[a{i}]");
+            }
+        }
+
+        var videoLabel = "v0";
+        var audioLabel = "a0";
+        if (ranges.Count > 1 && transition > 0)
+        {
+            var outputLength = ranges[0].End!.Value - ranges[0].Start;
+            for (var i = 1; i < ranges.Count; i++)
+            {
+                if (hasVideo)
+                {
+                    filterParts.Add($"[{videoLabel}][v{i}]xfade=transition={plan.Transition}:duration={F(transition)}:offset={F(outputLength - transition)}[vx{i}]");
+                    videoLabel = $"vx{i}";
+                }
+
+                if (hasAudio)
+                {
+                    filterParts.Add($"[{audioLabel}][a{i}]acrossfade=d={F(transition)}:c1=tri:c2=tri[ax{i}]");
+                    audioLabel = $"ax{i}";
+                }
+
+                if (ranges[i].End.HasValue)
+                {
+                    outputLength += ranges[i].End!.Value - ranges[i].Start - transition;
+                }
+            }
+        }
+        else if (ranges.Count > 1)
+        {
+            var concatInputs = string.Empty;
+            for (var i = 0; i < ranges.Count; i++)
+            {
+                concatInputs += (hasVideo ? $"[v{i}]" : string.Empty) + (hasAudio ? $"[a{i}]" : string.Empty);
+            }
+
+            filterParts.Add(concatInputs + $"concat=n={ranges.Count}:v={(hasVideo ? 1 : 0)}:a={(hasAudio ? 1 : 0)}" +
+                            (hasVideo ? "[vc]" : string.Empty) + (hasAudio ? "[ac]" : string.Empty));
+            videoLabel = "vc";
+            audioLabel = "ac";
+        }
+
+        var videoFades = new List<string>();
+        var audioFades = new List<string>();
+        if (plan.FadeInSeconds > 0)
+        {
+            videoFades.Add($"fade=t=in:st=0:d={F(plan.FadeInSeconds)}");
+            audioFades.Add($"afade=t=in:st=0:d={F(plan.FadeInSeconds)}");
+        }
+
+        if (plan.FadeOutSeconds > 0 && plan.OutputSeconds.HasValue)
+        {
+            var fadeOutStart = Math.Max(0, plan.OutputSeconds.Value - plan.FadeOutSeconds);
+            videoFades.Add($"fade=t=out:st={F(fadeOutStart)}:d={F(plan.FadeOutSeconds)}");
+            audioFades.Add($"afade=t=out:st={F(fadeOutStart)}:d={F(plan.FadeOutSeconds)}");
+        }
+
+        if (hasVideo)
+        {
+            filterParts.Add($"[{videoLabel}]{(videoFades.Count > 0 ? string.Join(",", videoFades) : "null")}[outv]");
+        }
+
+        if (hasAudio)
+        {
+            filterParts.Add($"[{audioLabel}]{(audioFades.Count > 0 ? string.Join(",", audioFades) : "anull")}[outa]");
+        }
+
+        return GetCutEncodingParameters($"-i \"{inputFileName}\" ", outputFileName, string.Join("; ", filterParts), hasVideo, hasAudio, videoEncoding);
+    }
+
+    private static string GetCutEncodingParameters(string inputArgs, string outputFileName, string filterComplex, bool hasVideo, bool hasAudio, string videoEncoding)
+    {
         var arguments =
-            $"-y -i \"{inputFileName}\" " +
+            "-y " + inputArgs +
             $"-filter_complex \"{filterComplex}\" ";
 
         if (hasVideo)
@@ -1627,7 +1940,7 @@ public class FfmpegGenerator
 
         if (hasVideo)
         {
-            arguments += "-c:v libx264 -preset veryfast -crf 23 ";
+            arguments += GetCutVideoEncoding(videoEncoding) + " ";
             if (hasAudio)
             {
                 arguments += "-c:a aac -b:a 192k ";
@@ -1643,6 +1956,34 @@ public class FfmpegGenerator
         arguments += $"\"{outputFileName}\"";
 
         return arguments.Trim();
+    }
+
+    public const string DefaultCutVideoEncoding = "libx264";
+
+    /// <summary>
+    /// Video encoder settings for "Cut video". There is no quality UI in the dialog, so every
+    /// encoder gets a fixed, visually good setting in its own terms - CRF for x264/x265, CQ for
+    /// NVENC, ICQ for QSV, constant QP for AMF and a quality value for VideoToolbox. The HEVC
+    /// encoders get the hvc1 tag, without which the Apple stack refuses to play the mp4/mov.
+    /// </summary>
+    internal static string GetCutVideoEncoding(string videoEncoding)
+    {
+        var settings = videoEncoding switch
+        {
+            "libx265" => "-c:v libx265 -preset veryfast -crf 26",
+            "h264_nvenc" or "hevc_nvenc" => $"-c:v {videoEncoding} -preset p4 -rc vbr -cq 23 -b:v 0",
+            "h264_qsv" or "hevc_qsv" => $"-c:v {videoEncoding} -preset veryfast -global_quality 23",
+            "h264_amf" or "hevc_amf" => $"-c:v {videoEncoding} -quality balanced -rc cqp -qp_i 22 -qp_p 24",
+            "h264_videotoolbox" or "hevc_videotoolbox" => $"-c:v {videoEncoding} -q:v 65",
+            _ => "-c:v libx264 -preset veryfast -crf 23",
+        };
+
+        if (videoEncoding == "libx265" || videoEncoding.StartsWith("hevc_", StringComparison.Ordinal))
+        {
+            settings += " -tag:v hvc1";
+        }
+
+        return settings;
     }
 
     /// <summary>
@@ -1731,6 +2072,42 @@ public class FfmpegGenerator
         return $"-y -f concat -safe 0 -i \"{concatListFileName}\" -c copy \"{outputFileName}\"";
     }
 
+    /// <summary>The shortest clip duration handed to ffmpeg's "-t", see <see cref="HasClipDuration"/>.</summary>
+    internal const double MinimumClipSeconds = 0.001;
+
+    /// <summary>
+    /// False for a range ffmpeg cannot cut a clip from: a line whose end lies at or before its
+    /// start. Callers check this first and skip the line - the clamp in the parameter builders
+    /// only keeps a bad value away from ffmpeg, it does not make a usable clip.
+    /// </summary>
+    /// <remarks>
+    /// A negative "-t" fails ("durationi out of range" up to ffmpeg 9.0.1, rejected while parsing
+    /// the options from 9.0.2), and "-t 0.000" is worse: zero means "no limit", so the clip
+    /// becomes the whole rest of the file - hours of audio for a line near the start of a movie.
+    /// </remarks>
+    internal static bool HasClipDuration(double durationSeconds)
+    {
+        return durationSeconds >= MinimumClipSeconds;
+    }
+
+    private static string FormatClipDuration(double durationSeconds)
+    {
+        var seconds = HasClipDuration(durationSeconds) ? durationSeconds : MinimumClipSeconds;
+        return seconds.ToString("0.000", CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// Writes a failed clip extraction to the error log: what was being cut, the command line,
+    /// the exit code and the last lines ffmpeg wrote.
+    /// </summary>
+    internal static void LogClipFailure(string what, string arguments, int exitCode, FfmpegOutputTail? output = null)
+    {
+        var tail = output?.ToString();
+        Se.LogError($"{what}: ffmpeg exit code {exitCode}{Environment.NewLine}" +
+                    $"ffmpeg {arguments}" +
+                    (string.IsNullOrEmpty(tail) ? string.Empty : Environment.NewLine + tail));
+    }
+
     /// <summary>
     /// Build ffmpeg parameters for cutting a voice-cloning reference clip out of a video: the
     /// requested range as mono PCM16 at <paramref name="sampleRate"/>.
@@ -1756,7 +2133,7 @@ public class FfmpegGenerator
         double minimumSeconds = 0)
     {
         var start = startSeconds.ToString("0.000", CultureInfo.InvariantCulture);
-        var duration = durationSeconds.ToString("0.000", CultureInfo.InvariantCulture);
+        var duration = FormatClipDuration(durationSeconds);
 
         var args = $"-y -ss {start} -t {duration} -i \"{videoFileName}\"";
         if (audioTrackFfIndex >= 0)
@@ -1797,7 +2174,7 @@ public class FfmpegGenerator
        string audioBitRate = "32k")
     {
         var start = startSeconds.ToString("0.000", CultureInfo.InvariantCulture);
-        var duration = durationSeconds.ToString("0.000", CultureInfo.InvariantCulture);
+        var duration = FormatClipDuration(durationSeconds);
 
         // Base parameters
         var args = $"-y -ss {start} -t {duration} -i \"{videoFileName}\"";

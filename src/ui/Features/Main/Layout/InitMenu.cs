@@ -180,6 +180,11 @@ public static class InitMenu
                         },
                         new MenuItem
                         {
+                            Header = Se.Language.File.Import.DvdSubtitlesDotDotDot,
+                            Command = vm.ImportDvdSubtitlesCommand,
+                        },
+                        new MenuItem
+                        {
                             Header = Se.Language.File.Import.ImageBasedSubtitleForEditDotDotDot,
                             Command = vm.ImportImageSubtitleForEditCommand,
                         },
@@ -750,6 +755,14 @@ public static class InitMenu
                     Header = Se.Language.Video.OpenSecondarySubtitleOnVideoPlayerDotDotDot,
                     Command = vm.OpenSecondarySubtitleCommand,
                     [!Visual.IsVisibleProperty] = new Binding(nameof(vm.IsVideoLoaded)),
+                },
+                // Re-styles the current second subtitle without the file picker (#15110).
+                // Shown whenever there is a second subtitle to edit.
+                new MenuItem
+                {
+                    Header = Se.Language.Video.EditSecondarySubtitleSettingsDotDotDot,
+                    Command = vm.EditSecondarySubtitleSettingsCommand,
+                    [!Visual.IsVisibleProperty] = new Binding(nameof(vm.IsSubtitleSecondaryVisible)),
                 },
                 new MenuItem
                 {

@@ -11,6 +11,7 @@ internal class IconNames
     public const string ArrowCollapseVertical = "mdi-arrow-collapse-vertical";
     public const string ArrowDownThin = "mdi-arrow-down-thin";
     public const string ArrowExpandRight = "mdi-arrow-expand-right";
+    public const string ArrowLeft = "mdi-arrow-left";
     public const string ArrowLeftRightBold = "mdi-arrow-left-right-bold";
     public const string ArrowLeftThick = "mdi-arrow-left-thick";
     public const string ArrowRightThick = "mdi-arrow-right-thick";
@@ -27,17 +28,20 @@ internal class IconNames
     public const string ChevronRight = "mdi-chevron-right";
     public const string ChevronDoubleLeft = "mdi-chevron-double-left";
     public const string ChevronDoubleRight = "mdi-chevron-double-right";
+    public const string ClockOutline = "mdi-clock-outline";
     public const string Close = "mdi-close";
     public const string ClosedCaption = "mdi-closed-caption";
     public const string Cogs = "mdi-cogs";
     public const string ContentCut = "mdi-content-cut";
     public const string ContentSave = "mdi-content-save";
     public const string Copy = "mdi-content-copy";
+    public const string Counter = "mdi-counter";
     public const string Creation = "mdi-creation";
     public const string CheckCircle = "mdi-check-circle";
     public const string Download = "mdi-download";
     public const string CloudDownload = "mdi-cloud-download-outline";
     public const string DatabaseArrowRight = "mdi-database-arrow-right";
+    public const string Disc = "mdi-disc";
     public const string DockTop = "mdi-dock-top";
     public const string DotsHorizontal = "mdi-dots-horizontal";
     public const string DotsVertical = "mdi-dots-vertical";
@@ -51,6 +55,8 @@ internal class IconNames
     public const string FileCog = "mdi-file-cog";
     public const string FileMultiple = "mdi-file-multiple";
     public const string FileOutline = "mdi-file-outline";
+    public const string FileReplaceOutline = "mdi-file-replace-outline";
+    public const string FileVideoOutline = "mdi-file-video-outline";
     public const string Filter = "mdi-filter";
     public const string Find = "mdi-magnify";
     public const string FindReplace = "mdi-find-replace";
@@ -70,6 +76,7 @@ internal class IconNames
     public const string Import = "mdi-import";
     public const string Information = "mdi-information";
     public const string Italic = "mdi-format-italic";
+    public const string LinkVariant = "mdi-link-variant";
     public const string Lock = "mdi-lock";
     public const string LockClock = "mdi-lock-clock";
     public const string MagnifyMinus = "mdi-magnify-minus";
@@ -127,6 +134,7 @@ internal class IconNames
     public const string SubtitlesOutline = "mdi-subtitles-outline";
     public const string Tune = "mdi-tune";
     public const string Trash = "mdi-trash-can-outline";
+    public const string Undo = "mdi-undo";
     public const string ViewGrid = "mdi-view-grid";
     public const string ViewList = "mdi-view-list";
     public const string ViewSplitVertical = "mdi-view-split-vertical";

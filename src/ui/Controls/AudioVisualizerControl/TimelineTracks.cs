@@ -557,7 +557,16 @@ public class TimelineTracks : Control, IDisposable
         var step = GetFilmstripStepSeconds(pixelsPerSecond);
         var tileWidth = step * pixelsPerSecond;
         var firstTile = Math.Max(0, (long)Math.Floor(startSeconds / step));
-        for (var tile = firstTile; tile * step < endSeconds; tile++)
+
+        // No tiles past the end of the media (as far as the waveform knows it): there is no
+        // picture there, only an ffmpeg run per tile to find that out.
+        var lastTileSeconds = endSeconds;
+        if (source.WavePeaks is { LengthInSeconds: > 0 } wavePeaks)
+        {
+            lastTileSeconds = Math.Min(endSeconds, wavePeaks.LengthInSeconds);
+        }
+
+        for (var tile = firstTile; tile * step < lastTileSeconds; tile++)
         {
             var x = Math.Round((tile * step - startSeconds) * pixelsPerSecond);
             var tileRect = new Rect(x, row.Y, Math.Max(1, tileWidth - 1), row.Height);
@@ -626,9 +635,11 @@ public class TimelineTracks : Control, IDisposable
         }
 
         var text = GetText(paragraph, original);
+        var textPosition = new Point(block.X + 5, block.Y + (block.Height - text.Height) / 2);
         using (context.PushClip(block.Deflate(new Thickness(4, 0, 3, 0))))
+        using (_source?.BlurText == true ? context.PushEffect(AudioVisualizer.TextBlurEffect, new Rect(textPosition, new Size(text.Width, text.Height))) : (IDisposable?)null)
         {
-            context.DrawText(text, new Point(block.X + 5, block.Y + (block.Height - text.Height) / 2));
+            context.DrawText(text, textPosition);
         }
     }
 

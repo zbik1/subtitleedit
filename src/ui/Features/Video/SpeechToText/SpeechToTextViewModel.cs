@@ -73,6 +73,7 @@ public partial class SpeechToTextViewModel : ObservableObject
     [ObservableProperty] private bool _isTranslateVisible;
     [ObservableProperty] private bool _isBackendSelectionVisible;
     [ObservableProperty] private bool _isModelSelectionVisible;
+    [ObservableProperty] private bool _isModelDownloadVisible;
     [ObservableProperty] private bool _isLanguageSelectionVisible;
     [ObservableProperty] private bool _isWhisperCppSelected;
     [ObservableProperty] private ObservableCollection<ISpeechToTextEngine> _whisperCppBackends;
@@ -82,6 +83,8 @@ public partial class SpeechToTextViewModel : ObservableObject
     [ObservableProperty] private CrispAsrEngineBase? _selectedCrispAsrBackend;
     [ObservableProperty] private bool _isForcedAlignerVisible;
     [ObservableProperty] private bool _doIsolateSpeech;
+    [ObservableProperty] private bool _doDetectSpeakers;
+    [ObservableProperty] private bool _isDetectSpeakersVisible;
     [ObservableProperty] private ObservableCollection<ForcedAlignerOption> _forcedAligners;
     [ObservableProperty] private ForcedAlignerOption? _selectedForcedAligner;
     [ObservableProperty] private double _progressOpacity;
@@ -156,6 +159,7 @@ public partial class SpeechToTextViewModel : ObservableObject
     private bool _unknownArgument;
     private bool _cudaOutOfMemory;
     private bool _cudaComputeTypeNotSupported;
+    private bool _torchWithoutCuda;
     private bool _incompleteModel;
     private string? _missingSharedLibrary;
 
@@ -234,6 +238,7 @@ public partial class SpeechToTextViewModel : ObservableObject
     private string? _batchOutputFolder;
     private bool _isUpdatingWhisperCppBackend;
     private bool _isUpdatingCrispAsrBackend;
+    private bool _keepDetectSpeakersSetting;
     private static bool _crispAsrUpdatePromptShown;
     private static bool _whisperCppUpdatePromptShown;
     private static bool _qwen3AsrCppUpdatePromptShown;
@@ -329,6 +334,7 @@ public partial class SpeechToTextViewModel : ObservableObject
         IsTranslateVisible = IsTranslateAvailable(GetEffectiveSelectedEngine());
         IsBackendSelectionVisible = false;
         IsModelSelectionVisible = true;
+        IsModelDownloadVisible = true;
         IsWhisperCppSelected = false;
         IsCrispAsrSelected = false;
         Parameters = string.Empty;
@@ -360,6 +366,7 @@ public partial class SpeechToTextViewModel : ObservableObject
         DoAdjustTimings = Se.Settings.Tools.AudioToText.WhisperAutoAdjustTimings;
         DoPostProcessing = Se.Settings.Tools.AudioToText.PostProcessing;
         DoIsolateSpeech = Se.Settings.Tools.AudioToText.CrispAsrIsolateSpeech;
+        DoDetectSpeakers = Se.Settings.Tools.AudioToText.CrispAsrDetectSpeakers;
         AddLanguageCodeToFileName = Se.Settings.Tools.AudioToText.WhisperAddLanguageCodeToFileName;
 
         OpenAiCompatibleSttUrl = Se.Settings.Tools.OpenAiCompatibleSttUrl;
@@ -428,6 +435,11 @@ public partial class SpeechToTextViewModel : ObservableObject
         Se.Settings.Tools.AudioToText.WhisperAutoAdjustTimings = DoAdjustTimings;
         Se.Settings.Tools.AudioToText.PostProcessing = DoPostProcessing;
         Se.Settings.Tools.AudioToText.CrispAsrIsolateSpeech = DoIsolateSpeech;
+        if (!_keepDetectSpeakersSetting)
+        {
+            Se.Settings.Tools.AudioToText.CrispAsrDetectSpeakers = DoDetectSpeakers;
+        }
+
         Se.Settings.Tools.AudioToText.WhisperAddLanguageCodeToFileName = AddLanguageCodeToFileName;
         var engine = GetEffectiveSelectedEngine();
         engine.CommandLineParameter = Parameters;
@@ -515,6 +527,18 @@ public partial class SpeechToTextViewModel : ObservableObject
             or WhisperChoice.OpenAi;
     }
 
+    // Pseudo language code for Purfview Faster Whisper XXL's "--multilingual" mode, which
+    // detects the language on every segment instead of once for the whole file - handy for
+    // mapping out where a film switches between spoken languages (#15381).
+    private const string MultilingualLanguageCode = "multilingual";
+
+    private static bool IsAutoOrMultilingual(string? languageCode)
+    {
+        return languageCode != null &&
+               (languageCode.Equals("auto", StringComparison.OrdinalIgnoreCase) ||
+                languageCode.Equals(MultilingualLanguageCode, StringComparison.OrdinalIgnoreCase));
+    }
+
     // Builds the language dropdown for an engine, prepending an "Auto detect" entry
     // (code "auto") for engines that support automatic language detection.
     private static IEnumerable<WhisperLanguage> GetEngineLanguages(ISpeechToTextEngine engine)
@@ -523,6 +547,11 @@ public partial class SpeechToTextViewModel : ObservableObject
         if (EngineSupportsAutoLanguageDetection(engine))
         {
             result.Add(new WhisperLanguage("auto", "Auto detect"));
+        }
+
+        if (engine.Choice == WhisperChoice.PurfviewFasterWhisperXxl)
+        {
+            result.Add(new WhisperLanguage(MultilingualLanguageCode, "Multilingual (detect per segment)"));
         }
 
         // Bubble the user's favorite languages to the top (the "Auto detect" entry stays first).
@@ -535,6 +564,36 @@ public partial class SpeechToTextViewModel : ObservableObject
         return engine is not Qwen3AsrCppEngine and not ICrispAsrEngine and not IOnlineSttEngine;
     }
 
+    private void UpdateTranslateVisibility()
+    {
+        IsTranslateVisible = IsTranslateAvailable(GetEffectiveSelectedEngine()) &&
+                             SelectedModel?.Model is not { TranscribeOnly: true };
+        if (!IsTranslateVisible)
+        {
+            DoTranslateToEnglish = false;
+        }
+    }
+
+    partial void OnSelectedModelChanged(SpeechToTextModelDisplay? value)
+    {
+        UpdateTranslateVisibility();
+    }
+
+    private static void RepairAlignmentHeads(string modelFolder, WhisperModel model)
+    {
+        try
+        {
+            if (FasterWhisperAlignmentHeads.Repair(modelFolder, model.DecoderLayers, model.DecoderAttentionHeads))
+            {
+                Se.WriteToolsLog($"Repaired alignment_heads in \"{Path.Combine(modelFolder, "config.json")}\" for {model.DecoderLayers} decoder layers");
+            }
+        }
+        catch (Exception e)
+        {
+            SeLogger.Error(e, $"Unable to repair alignment_heads for speech-to-text model \"{model.Name}\"");
+        }
+    }
+
     private void UpdateBackendSelectionUi()
     {
         UpdateWhisperCppBackendUi();
@@ -542,6 +601,7 @@ public partial class SpeechToTextViewModel : ObservableObject
         UpdateForcedAlignerUi();
         IsBackendSelectionVisible = IsWhisperCppSelected || IsCrispAsrSelected;
         IsForcedAlignerVisible = IsCrispAsrSelected;
+        IsDetectSpeakersVisible = IsCrispAsrSelected && GetEffectiveSelectedEngine() is not CrispAsrMossDiarize;
     }
 
     private void UpdateForcedAlignerUi()
@@ -882,6 +942,11 @@ public partial class SpeechToTextViewModel : ObservableObject
                     await ShowCudaComputeTypeNotSupported(engine);
                     hasError = true;
                 }
+                else if (_torchWithoutCuda)
+                {
+                    await ShowTorchWithoutCuda(engine);
+                    hasError = true;
+                }
 
                 if (!hasError && GetResultFromSrt(_audioFileName, _videoFileName!, out var resultTexts, _outputText, _filesToDelete))
                 {
@@ -974,7 +1039,7 @@ public partial class SpeechToTextViewModel : ObservableObject
     /// was the crispasr v0.8.29 GPU packages, built with AVX-512 against a CI runner that had it
     /// (CrispASR #374) - every CPU without AVX-512 got this on the CUDA/Vulkan build while the CPU
     /// build ran fine, so naming the installed package is most of the answer. That build flaw is
-    /// fixed from v0.8.30 (SE now pins v0.8.34), but the message still earns its keep: a pre-AVX2 CPU
+    /// fixed from v0.8.30 (SE now pins v0.8.39), but the message still earns its keep: a pre-AVX2 CPU
     /// hits the same silent death on the AVX2 CPU package, and an install predating the pin bump
     /// keeps the broken GPU binary until the user downloads the engine again.
     /// </summary>
@@ -1122,6 +1187,62 @@ public partial class SpeechToTextViewModel : ObservableObject
     }
 
     /// <summary>
+    /// True for the line a CPU-only build prints when asked for "--device cuda". The WhisperX
+    /// standalone build SE downloads has a CPU-only torch: on Windows it dies loading the voice
+    /// activity model with the torch message (#15206); on macOS the CTranslate2 package has no
+    /// CUDA either and fails first, with its own message.
+    /// </summary>
+    internal static bool IsNoCudaBuildError(string line)
+    {
+        return line.Contains("Torch not compiled with CUDA enabled", StringComparison.OrdinalIgnoreCase) ||
+               line.Contains("CTranslate2 package was not compiled with CUDA support", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task ShowTorchWithoutCuda(ISpeechToTextEngine engine)
+    {
+        const string title = "CUDA not available";
+        var nl = Environment.NewLine;
+        var cause = engine is WhisperEngineWhisperX
+            ? $"This WhisperX build runs on the CPU only - it cannot use \"--device cuda\", so no text was transcribed.{nl}{nl}"
+            : $"This engine was built without CUDA support, so it cannot run on the GPU and no text was transcribed.{nl}{nl}";
+
+        var parameters = Parameters ?? string.Empty;
+        var cpuParameters = RemoveGpuParameters(parameters);
+        if (cpuParameters == parameters.Trim())
+        {
+            await MessageBox.Show(Window!, title, cause + "Remove any GPU settings from the parameters, or run on CPU.");
+            return;
+        }
+
+        var shownParameters = string.IsNullOrEmpty(cpuParameters) ? "(none)" : cpuParameters;
+        var answer = await MessageBox.Show(Window!, title,
+            cause + $"Remove the GPU settings from the parameters so it runs on the CPU?{nl}{nl}" +
+            $"New parameters: {shownParameters}",
+            MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+
+        if (answer != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        Parameters = cpuParameters;
+        engine.CommandLineParameter = Parameters;
+        SaveSettings();
+    }
+
+    /// <summary>
+    /// Removes the arguments that only work on a GPU: "--device" / "--device_index" with their
+    /// values, and the half-precision compute types, which CTranslate2 refuses on a CPU
+    /// ("--compute_type float16" was the other half of the #15206 command line).
+    /// </summary>
+    internal static string RemoveGpuParameters(string parameters)
+    {
+        var result = Regex.Replace(parameters, @"(^|\s)--device(_index)?(\s+|=)\S+", " ", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, @"(^|\s)--compute_type(\s+|=)(float16|bfloat16|int8_float16|int8_bfloat16)(?=\s|$)", " ", RegexOptions.IgnoreCase);
+        return Regex.Replace(result, @"\s{2,}", " ").Trim();
+    }
+
+    /// <summary>
     /// True for the engines built on faster-whisper/CTranslate2, which are the ones that both
     /// accept "--compute_type" and can hit the cuBLAS compute type error in the first place.
     /// </summary>
@@ -1256,7 +1377,7 @@ public partial class SpeechToTextViewModel : ObservableObject
             // output into one space-riddled blob cut mid-sentence.
             var subtitle = Qwen3AsrWordSegmenter.BuildSubtitle(
                 words,
-                Configuration.Settings.General.SubtitleLineMaximumLength * 2,
+                SpeechToTextPostProcessor.GetParagraphMaxChars(),
                 Qwen3AsrWordSegmenter.DefaultMaxCharsCjk);
 
             FixNegativeDuration(subtitle);
@@ -1883,12 +2004,37 @@ public partial class SpeechToTextViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Sets a batch row's status from its transcription result. A row with no text must be
+    /// marked Error here, not left alone: the batch list is reused between runs, so a row
+    /// left untouched keeps the Converted of an earlier run and is counted as converted
+    /// in the closing summary (#15206).
+    /// </summary>
+    internal static void ApplyBatchItemResult(SpeechToTextJobItem item, Subtitle? transcribedSubtitle)
+    {
+        item.Status = transcribedSubtitle != null && transcribedSubtitle.Paragraphs.Count > 0
+            ? Se.Language.General.Converted
+            : Se.Language.General.Error;
+    }
+
+    /// <summary>
+    /// Clears every row's status before a new batch run, so statuses from an earlier run
+    /// (e.g. a CPU run before a failing CUDA run, #15206) do not look like results of this one.
+    /// </summary>
+    internal static void ResetBatchStatuses(IEnumerable<SpeechToTextJobItem> items)
+    {
+        foreach (var item in items)
+        {
+            item.Status = string.Empty;
+        }
+    }
+
     private void StartNext(Subtitle? transcribedSubtitle)
     {
         var currentItem = _jobItems[_batchIndex];
-        if (transcribedSubtitle != null && transcribedSubtitle.Paragraphs.Count > 0)
+        ApplyBatchItemResult(currentItem, transcribedSubtitle);
+        if (currentItem.Status == Se.Language.General.Converted)
         {
-            currentItem.Status = Se.Language.General.Converted;
             var languageCode = AddLanguageCodeToFileName ? GetFileNameLanguageCode(transcribedSubtitle) : null;
             var subtitleFileName = GetSubtitleFileName(currentItem.InputVideoFileName, languageCode, _batchOutputFolder);
             var format = new SubRip();
@@ -2030,7 +2176,7 @@ public partial class SpeechToTextViewModel : ObservableObject
         }
 
         var languageCode = SelectedLanguage?.Code;
-        if (string.IsNullOrWhiteSpace(languageCode) || languageCode.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(languageCode) || IsAutoOrMultilingual(languageCode))
         {
             // Normalized here (not just at the end) so a hint that can't be mapped to a
             // code falls through to auto-detection instead of being dropped outright.
@@ -2042,7 +2188,7 @@ public partial class SpeechToTextViewModel : ObservableObject
             languageCode = LanguageAutoDetect.AutoDetectGoogleLanguageOrNull(transcript);
         }
 
-        if (string.IsNullOrWhiteSpace(languageCode) || languageCode.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(languageCode) || IsAutoOrMultilingual(languageCode))
         {
             return null;
         }
@@ -2115,7 +2261,7 @@ public partial class SpeechToTextViewModel : ObservableObject
 
         var postProcessor = new SpeechToTextPostProcessor(DoTranslateToEnglish ? "en" : languageCode)
         {
-            ParagraphMaxChars = Configuration.Settings.General.SubtitleLineMaximumLength * 2,
+            ParagraphMaxChars = SpeechToTextPostProcessor.GetParagraphMaxChars(),
             RemoveNonSpeechLines = Se.Settings.Tools.AudioToText.WhisperPostProcessingRemoveNonSpeechLines,
             RemoveRepeatedLines = Se.Settings.Tools.AudioToText.WhisperPostProcessingRemoveRepeatedLines,
             // The engine's own parameters, so word-highlighted output is left alone by the
@@ -2786,6 +2932,49 @@ public partial class SpeechToTextViewModel : ObservableObject
         return DoIsolateSpeech && GetEffectiveSelectedEngine() is ICrispAsrEngine;
     }
 
+    /// <summary>
+    /// "Detect speakers" is CrispASR's Sortformer pass, so like "Isolate speech" it must not leak
+    /// into other engines. MOSS Diarize writes its own speaker labels - a second pass would put
+    /// two labels on every line.
+    /// </summary>
+    private bool ShouldDetectSpeakers()
+    {
+        return ShouldDetectSpeakers(DoDetectSpeakers, GetEffectiveSelectedEngine());
+    }
+
+    internal static bool ShouldDetectSpeakers(bool doDetectSpeakers, ISpeechToTextEngine engine)
+    {
+        return doDetectSpeakers && engine is ICrispAsrEngine and not CrispAsrMossDiarize;
+    }
+
+    /// <summary>
+    /// Makes sure the diarization model is on disk and the installed CrispASR knows about it - an
+    /// older one aborts on "--diarize-model" before transcribing anything.
+    /// </summary>
+    private async Task<bool> EnsureSpeakerDetectionReadyAsync(ISpeechToTextEngine engine)
+    {
+        var installedVersion = CrispAsrVersion.TryGet(engine.GetExecutable());
+        if (!SpeakerDiarizationModel.IsSupportedBy(installedVersion))
+        {
+            await MessageBox.Show(
+                Window!,
+                Se.Language.Video.AudioToText.DetectSpeakers,
+                string.Format(Se.Language.Video.AudioToText.DetectSpeakersNeedsNewerCrispAsr, SpeakerDiarizationModel.MinimumCrispAsrVersion, installedVersion),
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return false;
+        }
+
+        return await SpeechIsolationModelDownload.EnsureModelDownloadedAsync(
+            Window!,
+            _windowService,
+            engine,
+            SpeakerDiarizationModel.ToWhisperModel(),
+            SpeakerDiarizationModel.DisplayName,
+            Se.Language.Video.AudioToText.DetectSpeakers,
+            "a speaker diarization model");
+    }
+
     private Task<bool> EnsureSpeechIsolationModelDownloadedAsync(ISpeechToTextEngine engine)
     {
         return SpeechIsolationModelDownload.EnsureDownloadedAsync(Window!, _windowService, engine, Se.Language.Video.AudioToText.IsolateSpeech);
@@ -2865,22 +3054,46 @@ public partial class SpeechToTextViewModel : ObservableObject
         Se.WriteToolsLog($"{executable} {separateArguments}");
         LogToConsole($"Isolating speech with : {executable} {separateArguments}{Environment.NewLine}");
 
-        // Kept for the tools log only: the separator prints no progress worth showing, but when
-        // it fails its output is the only clue to why.
+        // The output is kept for the tools log - when the separator fails it is the only clue to
+        // why - and its per-chunk lines are the progress (#15176): on a machine without a GPU
+        // the separation takes minutes per minute of audio, so the bar has to move.
         var separateLog = new StringBuilder();
+        var progress = new SpeechIsolationProgress(SpeechIsolationProgress.GetChunkCountFromWaveFile(audioFileName));
+
+        // HasExited does not wait for the async stderr reader, so a last progress line can be
+        // posted after the separator is done - it must not put the bar back up once
+        // transcription has taken it over.
+        var separating = true;
         DataReceivedEventHandler logHandler = (_, args) =>
         {
-            if (!string.IsNullOrWhiteSpace(args.Data))
+            if (string.IsNullOrWhiteSpace(args.Data))
             {
-                lock (separateLog)
+                return;
+            }
+
+            lock (separateLog)
+            {
+                separateLog.AppendLine(args.Data);
+            }
+
+            if (progress.TryUpdate(args.Data) && progress.Percent is { } percent)
+            {
+                Dispatcher.UIThread.Post(() =>
                 {
-                    separateLog.AppendLine(args.Data);
-                }
+                    if (_abort || _windowClosing || !Volatile.Read(ref separating))
+                    {
+                        return;
+                    }
+
+                    ProgressValue = percent;
+                    ProgressText = $"{Se.Language.Video.AudioToText.IsolatingSpeech} {percent}%";
+                });
             }
         };
 
-        using (var separateProcess = StartEngineProcess(executable, separateArguments, logHandler))
+        try
         {
+            using var separateProcess = StartEngineProcess(executable, separateArguments, logHandler);
             if (!await WaitForExitOrAbortAsync(separateProcess))
             {
                 if (!_abort)
@@ -2893,6 +3106,10 @@ public partial class SpeechToTextViewModel : ObservableObject
 
                 return null;
             }
+        }
+        finally
+        {
+            Volatile.Write(ref separating, false);
         }
 
         var stemFileName = SpeechIsolationModel.GetSpeechStemFileName(audioFileName, outputFolder);
@@ -3491,6 +3708,11 @@ public partial class SpeechToTextViewModel : ObservableObject
     [RelayCommand]
     private async Task DownloadModel()
     {
+        if (GetEffectiveSelectedEngine().DownloadsOwnModels)
+        {
+            return;
+        }
+
         var vm = await _windowService.ShowDialogAsync<DownloadSpeechToTextModelsWindow, DownloadSpeechToTextModelsViewModel>(
             Window!, viewModel => { viewModel.SetModels(Models, GetEffectiveSelectedEngine(), SelectedModel); });
 
@@ -3673,6 +3895,7 @@ public partial class SpeechToTextViewModel : ObservableObject
             _unknownArgument = false;
             _cudaOutOfMemory = false;
             _cudaComputeTypeNotSupported = false;
+            _torchWithoutCuda = false;
             _incompleteModel = false;
             _missingSharedLibrary = null;
             _loadedFromStdOut = false;
@@ -3771,12 +3994,17 @@ public partial class SpeechToTextViewModel : ObservableObject
                 RefreshEngineCombo?.Invoke();
             }
 
-            if (!engine.IsModelInstalled(model.Model))
+            // Engines that download their own models (WhisperX) are never routed through SE's
+            // downloader: it would fill a folder the engine does not read and re-prompt on
+            // every run. Their IsModelInstalled only drives the model dot.
+            if (!engine.DownloadsOwnModels && !engine.IsModelInstalled(model.Model))
             {
                 var answer = await MessageBox.Show(
                     Window!,
                     $"Download {model}?",
-                    $"Download and use {model.Model.Name}?",
+                    (engine as CrispAsrEngine)?.SelectedBackend is CrispAsrSenseVoice senseVoice && senseVoice.IsModelOutdated(model.Model)
+                        ? $"An updated {model.Model.Name} is available (re-converted for Crisp ASR v0.8.36).\nDownload and use it?"
+                        : $"Download and use {model.Model.Name}?",
                     MessageBoxButtons.YesNoCancel,
                     MessageBoxIcon.Question);
 
@@ -3857,6 +4085,11 @@ public partial class SpeechToTextViewModel : ObservableObject
                 return;
             }
 
+            if (ShouldDetectSpeakers() && !await EnsureSpeakerDetectionReadyAsync(engine))
+            {
+                return;
+            }
+
             if (language.Code != "en" && IsModelEnglishOnly(model.Model))
             {
                 var answer = await MessageBox.Show(
@@ -3898,6 +4131,7 @@ public partial class SpeechToTextViewModel : ObservableObject
         else
         {
             _jobItems = BatchItems;
+            ResetBatchStatuses(_jobItems);
         }
 
         _batchIndex = 0;
@@ -4024,7 +4258,10 @@ public partial class SpeechToTextViewModel : ObservableObject
         settings.WhisperChoice = engine.Choice;
         SaveSettings();
 
+        // SetProgressBarPct only moves the bar forward, so a value left by an earlier stage
+        // (speech isolation ends at 100%) would pin it there for the whole transcription.
         _showProgressPct = -1;
+        ProgressValue = 0;
         IsTranscribeEnabled = false;
         ProgressOpacity = 1;
         ProgressText = GetProgressText();
@@ -4383,6 +4620,16 @@ public partial class SpeechToTextViewModel : ObservableObject
                 }
             }
 
+            var diarizePart = string.Empty;
+            if (ShouldDetectSpeakers(DoDetectSpeakers, crispAsrEngine))
+            {
+                var diarizeModel = crispAsrEngine.GetModelForCmdLine(SpeakerDiarizationModel.FileName);
+                if (File.Exists(diarizeModel))
+                {
+                    diarizePart = " " + SpeakerDiarizationModel.BuildArguments(diarizeModel);
+                }
+            }
+
             // Remembered so an empty result can be told apart from an empty result *because of*
             // VAD - only the latter is worth re-running without it (#13911).
             _crispAsrVadWasUsed = vadPart.Length > 0;
@@ -4392,8 +4639,8 @@ public partial class SpeechToTextViewModel : ObservableObject
             // once the whole file is done - without this the progress bar sat idle for the
             // entire run and jumped straight to 100%.
             var crispParams = string.IsNullOrWhiteSpace(crispArgs)
-                ? $"--backend {crispAsrEngine.BackendName} {langPart}-m \"{crispModel}\"{alignerPart}{vadPart} -f \"{waveFileName}\" --output-srt --print-progress"
-                : $"--backend {crispAsrEngine.BackendName} {langPart}-m \"{crispModel}\"{alignerPart}{vadPart} -f \"{waveFileName}\" --output-srt --print-progress {crispArgs}";
+                ? $"--backend {crispAsrEngine.BackendName} {langPart}-m \"{crispModel}\"{alignerPart}{vadPart}{diarizePart} -f \"{waveFileName}\" --output-srt --print-progress"
+                : $"--backend {crispAsrEngine.BackendName} {langPart}-m \"{crispModel}\"{alignerPart}{vadPart}{diarizePart} -f \"{waveFileName}\" --output-srt --print-progress {crispArgs}";
 
             Se.WriteToolsLog($"{exe} {crispParams}");
 
@@ -4412,6 +4659,18 @@ public partial class SpeechToTextViewModel : ObservableObject
                 cppVulkanDevice = deviceMatch.Groups[1].Value;
                 args = Regex.Replace(args, @"--device\s+\d+", "").Trim(); // Remove --device and its value from args
             }
+        }
+
+        var whisperModel = engine.Models.FirstOrDefault(p => p.Name == model);
+        if (whisperModel is { TranscribeOnly: true })
+        {
+            // It would ignore the task and write the source language anyway (#15223).
+            translate = false;
+        }
+
+        if (engine is WhisperEnginePurfviewFasterWhisperXxl purfviewEngine && whisperModel is { DecoderLayers: > 0 })
+        {
+            RepairAlignmentHeads(purfviewEngine.GetAndCreateWhisperModelFolder(whisperModel), whisperModel);
         }
 
         var translateToEnglish = translate ? GetWhisperTranslateParameter(engine) : string.Empty;
@@ -4449,7 +4708,15 @@ public partial class SpeechToTextViewModel : ObservableObject
         // engines (Purfview, CTranslate2) and OpenAI reject "auto" but auto-detect when no
         // --language is given, so the flag is omitted there.
         var languageArg = $"--language {language} ";
-        if (language.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        if (language.Equals(MultilingualLanguageCode, StringComparison.OrdinalIgnoreCase))
+        {
+            // Per-segment language detection (#15381) - no fixed --language. A user who already
+            // set --multilingual in the extra parameters keeps their own value.
+            languageArg = args.Contains("--multilingual", StringComparison.Ordinal)
+                ? string.Empty
+                : "--multilingual True ";
+        }
+        else if (language.Equals("auto", StringComparison.OrdinalIgnoreCase))
         {
             languageArg = settings.WhisperChoice is WhisperChoice.Cpp or WhisperChoice.CppCuBlas
                 or WhisperChoice.CppVulkan or WhisperChoice.CppCuBlasLib or WhisperChoice.ConstMe
@@ -4763,6 +5030,10 @@ public partial class SpeechToTextViewModel : ObservableObject
             // result (issue #13902).
             _cudaComputeTypeNotSupported = true;
         }
+        else if (IsNoCudaBuildError(outLine.Data))
+        {
+            _torchWithoutCuda = true;
+        }
         //if (outLine.Data.Contains("running on: CUDA", StringComparison.OrdinalIgnoreCase))
         //{
         //    _runningOnCuda = true;
@@ -5012,9 +5283,12 @@ public partial class SpeechToTextViewModel : ObservableObject
         // peaking at -0.5 dBFS - and that distortion costs recognition accuracy (#13738). The gain
         // buys nothing in return: whisper's log-mel front end clamps to "max - 8 dB" and rescales,
         // so a uniform gain is normalized away before the model ever sees it.
+        // "aresample=async=1:first_pts=0" keeps gaps in the audio timestamps as silence. Without it
+        // ffmpeg writes the decoded samples back to back, and every time code after a gap came back
+        // early - 0.7 s for the screen recording in issue #15385.
         var channelArgs = useCenterChannelOnly
-            ? "-af \"pan=mono|c0=FC\""
-            : "-ac 1";
+            ? "-af \"pan=mono|c0=FC,aresample=async=1:first_pts=0\""
+            : "-af aresample=async=1:first_pts=0 -ac 1";
 
         return normalized switch
         {
@@ -5148,6 +5422,10 @@ public partial class SpeechToTextViewModel : ObservableObject
             SelectedModel = null;
         }
 
+        // SE's downloader saves into a folder an engine that downloads its own models never
+        // reads (WhisperX: the Hugging Face hub cache), so offering it only wastes gigabytes.
+        IsModelDownloadVisible = IsModelSelectionVisible && !engine.DownloadsOwnModels;
+
         IsLanguageSelectionVisible = !isOnlineSttEngine;
         if (!IsLanguageSelectionVisible)
         {
@@ -5160,7 +5438,7 @@ public partial class SpeechToTextViewModel : ObservableObject
         IsGoogleCloudSttVisible = engine is GoogleCloudSttEngine;
         IsAdvancedSettingsVisible = !isOnlineSttEngine;
 
-        IsTranslateVisible = IsTranslateAvailable(engine);
+        UpdateTranslateVisibility();
 
         Parameters = engine.CommandLineParameter;
 
@@ -5602,12 +5880,22 @@ public partial class SpeechToTextViewModel : ObservableObject
     /// need a specific one - "find the voices in the video" needs an engine that tells speakers
     /// apart. The user can still switch it in the window; nothing is forced beyond the first view.
     /// </param>
-    internal void Initialize(string? videoFileName, int audioTrackNumber, string? preferredEngineChoice = null)
+    /// <param name="detectSpeakers">
+    /// Starts with "Detect speakers" on, so a Crisp ASR backend the user switches to still labels
+    /// the speakers. Only for this window: the user's own default is left as it was.
+    /// </param>
+    internal void Initialize(string? videoFileName, int audioTrackNumber, string? preferredEngineChoice = null, bool detectSpeakers = false)
     {
         _videoFileName = videoFileName;
         _audioTrackNumber = audioTrackNumber;
         _audioTrackVideoFileName = videoFileName;
         TrySelectEngineChoice(preferredEngineChoice);
+        if (detectSpeakers)
+        {
+            DoDetectSpeakers = true;
+            _keepDetectSpeakersSetting = true;
+        }
+
         if (string.IsNullOrEmpty(_videoFileName) || !File.Exists(_videoFileName))
         {
             IsBatchModeVisible = false;

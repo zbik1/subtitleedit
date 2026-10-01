@@ -18,10 +18,10 @@ namespace Nikse.SubtitleEdit.Logic.Config;
 public class Se
 {
     internal const int CurrentMacOsFontMigrationVersion = 1;
-    internal const int CurrentShortcutsMigrationVersion = 4;
+    internal const int CurrentShortcutsMigrationVersion = 5;
     internal const int CurrentLayoutMigrationVersion = 2;
 
-    public static string Version { get; set; } = "v5.3.0-beta7";
+    public static string Version { get; set; } = "v5.3.0-beta18";
 
     public SeGeneral General { get; set; } = new();
     public List<SeShortCut> Shortcuts { get; set; } = new();
@@ -459,6 +459,10 @@ public class Se
     /// Version 4 (macOS only): several defaults moved off standard macOS shortcuts (#14941, see
     /// <see cref="ShortcutsMain.MacOsDefaultChanges"/>). Bindings still on the old default move to
     /// the new one, unless another action already uses the new keys.
+    ///
+    /// Version 5: v5.3.0 betas shipped Ctrl+Shift+V (Cmd+Shift+V on macOS) as the default for the
+    /// voice manager, which "fill selected lines with clipboard text" already had (#15326). The
+    /// voice manager has no default now, and bindings still on the stale default are cleared.
     /// </summary>
     internal void MigrateShortcuts()
     {
@@ -517,6 +521,20 @@ public class Se
         {
             MigrateMacOsDefaultShortcuts();
         }
+
+        if (fromVersion < 5)
+        {
+            string[] oldVoiceManagerKeys = [isMacOS ? "Win" : "Control", "Shift", "V"];
+            foreach (var shortcut in Shortcuts)
+            {
+                if (shortcut.ActionName == nameof(MainViewModel.ShowVideoVoiceManagerCommand) &&
+                    shortcut.Keys != null &&
+                    IsSameKeys([.. shortcut.Keys.Select(ShortcutManager.NormalizeKeyToken)], oldVoiceManagerKeys))
+                {
+                    shortcut.Keys.Clear();
+                }
+            }
+        }
     }
 
     private void MigrateMacOsDefaultShortcuts()
@@ -533,6 +551,46 @@ public class Se
             }
         }
 
+        ApplyShortcutMoves(Shortcuts, moves);
+    }
+
+    /// <summary>
+    /// The way back, for shortcuts exported on macOS and imported on Windows/Linux: bindings on a
+    /// macOS-only default (<see cref="ShortcutsMain.MacOsDefaultChanges"/>, and the Control added
+    /// to "open data folder" in version 3) go to the default every system shares - still with the
+    /// macOS modifier names, the caller renames those. Without it Cmd+G (find next) and Ctrl+G
+    /// (go to line) both became Ctrl+G, and Delete no longer deleted lines.
+    /// </summary>
+    internal static void RevertMacOsDefaultShortcuts(List<SeShortCut> shortcuts)
+    {
+        var moves = new List<(SeShortCut Shortcut, string[] NewKeys)>();
+        foreach (var shortcut in shortcuts)
+        {
+            if (shortcut.Keys == null)
+            {
+                continue;
+            }
+
+            foreach (var change in ShortcutsMain.MacOsDefaultChanges)
+            {
+                if (change.NewKeys.Length > 0 && shortcut.ActionName == change.ActionName && IsSameKeys(shortcut.Keys, change.NewKeys))
+                {
+                    moves.Add((shortcut, change.OldKeys));
+                }
+            }
+
+            if (shortcut.ActionName == nameof(MainViewModel.OpenDataFolderCommand) &&
+                IsSameKeys(shortcut.Keys, ["Ctrl", "Win", "Alt", "Shift", "D"]))
+            {
+                moves.Add((shortcut, ["Win", "Alt", "Shift", "D"]));
+            }
+        }
+
+        ApplyShortcutMoves(shortcuts, moves);
+    }
+
+    private static void ApplyShortcutMoves(List<SeShortCut> shortcuts, List<(SeShortCut Shortcut, string[] NewKeys)> moves)
+    {
         // Never create a duplicate binding: skip a move whose new keys are held by an action that
         // stays put. Skipping one can block another (Cmd+G only frees up when go-to-line moves),
         // so repeat until nothing changes.
@@ -543,7 +601,7 @@ public class Se
             foreach (var move in moves.ToList())
             {
                 if (move.NewKeys.Length > 0 &&
-                    Shortcuts.Any(s => !moves.Any(m => ReferenceEquals(m.Shortcut, s)) && IsSameKeys(s.Keys, move.NewKeys)))
+                    shortcuts.Any(s => s.Keys != null && !moves.Any(m => ReferenceEquals(m.Shortcut, s)) && IsSameKeys(s.Keys, move.NewKeys)))
                 {
                     moves.Remove(move);
                     skipped = true;
@@ -758,6 +816,28 @@ public class Se
     /// (the output goes to "-f null -"), so removing it changes nothing on older ffmpeg builds.
     /// A user who has edited the arguments in any other way keeps their own version.
     /// </summary>
+    /// <summary>
+    /// Makes sure the video controls layout has one item per type, and moves the old "Show stop
+    /// button" / "Show full-screen button" settings into the items' visibility (#15286).
+    /// </summary>
+    internal static void MigrateVideoControlsItems(SeVideo video)
+    {
+        video.ControlsItems = SeVideoControlsItem.Normalize(video.ControlsItems);
+
+        if (video.ShowStopButton == false)
+        {
+            video.ControlsItems.First(p => p.Type == SeVideoControlsItemType.Stop).IsVisible = false;
+        }
+
+        if (video.ShowFullscreenButton == false)
+        {
+            video.ControlsItems.First(p => p.Type == SeVideoControlsItemType.FullScreen).IsVisible = false;
+        }
+
+        video.ShowStopButton = null;
+        video.ShowFullscreenButton = null;
+    }
+
     internal static void MigrateShotChangesFfmpegArguments(SeVideo video)
     {
         var arguments = video.ShowChangesFFmpegArguments;
@@ -956,6 +1036,8 @@ public class Se
         MigrateShotChangesFfmpegArguments(Settings.Video);
         MigrateMpvAudioBuffer(Settings.Video);
 
+        MigrateVideoControlsItems(Settings.Video);
+
         if (Settings.Waveform == null)
         {
             Settings.Waveform = new();
@@ -969,6 +1051,8 @@ public class Se
         {
             Settings.BeautifyTimeCodes = new();
         }
+
+        Settings.BeautifyTimeCodes.CustomProfiles ??= new();
 
         if (Settings.Ocr == null)
         {
@@ -1064,6 +1148,7 @@ public class Se
 
 
         Configuration.Settings.Tools.AutoTranslateDelaySeconds = (int)Math.Round(Settings.AutoTranslate.RequestDelaySeconds, MidpointRounding.AwayFromZero);
+        Configuration.Settings.Tools.AutoTranslateKeepMusicLines = Settings.AutoTranslate.KeepMusicLinesUntranslated;
         if (Settings.AutoTranslate.RequestMaxBytes > 0)
         {
             Configuration.Settings.Tools.AutoTranslateMaxBytes = (int)Math.Round(Settings.AutoTranslate.RequestMaxBytes, MidpointRounding.AwayFromZero);

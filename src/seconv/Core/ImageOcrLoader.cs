@@ -1,9 +1,12 @@
-using Nikse.SubtitleEdit.Core.BluRaySup;
+﻿using Nikse.SubtitleEdit.Core.BluRaySup;
 using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Core.ContainerFormats.Matroska;
 using Nikse.SubtitleEdit.Core.ContainerFormats.Mp4.Boxes;
 using Nikse.SubtitleEdit.Core.ContainerFormats.TransportStream;
+using Nikse.SubtitleEdit.Core.VobSub;
+using Nikse.SubtitleEdit.UiLogic.Ocr;
 using Nikse.SubtitleEdit.UiLogic.Ocr.Paddle;
+using Nikse.SubtitleEdit.UiLogic.SubtitleLoading;
 using SkiaSharp;
 using Spectre.Console;
 using System.Text;
@@ -48,8 +51,113 @@ internal static class ImageOcrLoader
             AnsiConsole.MarkupLine($"[dim]Running {ocr.Name} OCR on {pcsList.Count} Blu-Ray sup image(s){isolationNote}...[/]");
         }
 
-        return PcsListToSubtitle(pcsList, ocr, options.PgsIsolateColors, options.Quiet);
+        return PcsListToSubtitle(pcsList, ocr, options.PgsIsolateColors, options.Quiet, options.OcrAutoDetectAssaAlignment);
     }
+
+    /// <summary>
+    /// HD-DVD .sup → text via the configured OCR engine, or time codes only when
+    /// <see cref="ConversionOptions.TimeCodesOnly"/> is set. Bitmaps are decoded one at a
+    /// time, so a feature-length stream never holds more than one decoded frame.
+    /// </summary>
+    public static Subtitle LoadHdDvdSup(string filePath, ConversionOptions options)
+    {
+        var pictures = HdDvdSupParser.Parse(filePath);
+        if (pictures.Count == 0)
+        {
+            throw new InvalidOperationException($"No HD-DVD sup subtitles found in: {filePath}");
+        }
+
+        if (options.TimeCodesOnly)
+        {
+            if (!options.Quiet)
+            {
+                AnsiConsole.MarkupLine($"[dim]Extracting time codes from {pictures.Count} HD-DVD sup image(s) (no OCR)...[/]");
+            }
+
+            return HdDvdPicturesToSubtitle(pictures, null);
+        }
+
+        using var ocr = OcrEngineFactory.Create(options);
+        var isolationNote = options.PgsIsolateColors ? string.Empty : " (colour isolation off)";
+        if (!options.Quiet)
+        {
+            AnsiConsole.MarkupLine($"[dim]Running {ocr.Name} OCR on {pictures.Count} HD-DVD sup image(s){isolationNote}...[/]");
+        }
+
+        return HdDvdPicturesToSubtitle(pictures, ocr, options.PgsIsolateColors, options.Quiet, options.OcrAutoDetectAssaAlignment);
+    }
+
+    /// <summary>
+    /// Image-list subtitle (cue text = image file names, see <see cref="ImageListSubtitleLoader"/>)
+    /// → text via the configured OCR engine, or time codes only when
+    /// <see cref="ConversionOptions.TimeCodesOnly"/> is set. Images are read one at a time.
+    /// </summary>
+    public static Subtitle LoadImageList(Subtitle imageList, string filePath, ConversionOptions options)
+    {
+        var paragraphs = imageList.Paragraphs;
+        if (options.TimeCodesOnly)
+        {
+            if (!options.Quiet)
+            {
+                AnsiConsole.MarkupLine($"[dim]Extracting time codes from {paragraphs.Count} image-list cue(s) (no OCR)...[/]");
+            }
+
+            var timing = new Subtitle();
+            timing.Paragraphs.AddRange(paragraphs.Select(p => new LibSeParagraph(string.Empty, p.StartTime.TotalMilliseconds, p.EndTime.TotalMilliseconds)));
+            timing.Renumber();
+            return timing;
+        }
+
+        using var ocr = OcrEngineFactory.Create(options);
+        var isolationNote = options.PgsIsolateColors ? string.Empty : " (colour isolation off)";
+        if (!options.Quiet)
+        {
+            AnsiConsole.MarkupLine($"[dim]Running {ocr.Name} OCR on {paragraphs.Count} image-list image(s){isolationNote}...[/]");
+        }
+
+        // Only images on a transparent background are binarised (like PGS: light fill, dark
+        // outline). An opaque image - dark text on a light box - would come out inverted.
+        Func<SKBitmap, SKBitmap>? isolate = options.PgsIsolateColors
+            ? (b => HasTransparentCorner(b) ? VobSubColorIsolation.BinarizeForOcr(b) : b.Copy())
+            : null;
+        var showProgress = !options.Quiet;
+        var texts = RecognizeAll(
+            ocr, paragraphs.Count, i => ImageListBitmapLoader.Load(paragraphs[i], filePath),
+            callerOwnsBitmap: false, isolate, quiet: !showProgress);
+
+        var subtitle = new Subtitle();
+        var missing = 0;
+        for (var i = 0; i < paragraphs.Count; i++)
+        {
+            if (texts[i] is null)
+            {
+                missing++;
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(texts[i]))
+            {
+                subtitle.Paragraphs.Add(new LibSeParagraph(texts[i], paragraphs[i].StartTime.TotalMilliseconds, paragraphs[i].EndTime.TotalMilliseconds));
+            }
+        }
+
+        if (showProgress)
+        {
+            ProgressLine.Report("OCR", paragraphs.Count, paragraphs.Count);
+            ProgressLine.Finish();
+        }
+
+        if (missing > 0 && !options.Quiet)
+        {
+            AnsiConsole.MarkupLine($"[yellow]Note: {missing} image file(s) named in {Path.GetFileName(filePath).EscapeMarkup()} could not be read and were dropped.[/]");
+        }
+
+        subtitle.Renumber();
+        return subtitle;
+    }
+
+    private static bool HasTransparentCorner(SKBitmap bitmap) =>
+        bitmap.Width > 0 && bitmap.Height > 0 && bitmap.GetPixel(0, 0).Alpha == 0;
 
     /// <summary>
     /// MKV PGS track (S_HDMV/PGS) → text via the configured OCR engine, or time codes only
@@ -80,7 +188,7 @@ internal static class ImageOcrLoader
             AnsiConsole.MarkupLine($"[dim]Running {ocr.Name} OCR on {pcsList.Count} MKV PGS image(s) (track #{track.TrackNumber}){isolationNote}...[/]");
         }
 
-        return PcsListToSubtitle(pcsList, ocr, options.PgsIsolateColors, options.Quiet);
+        return PcsListToSubtitle(pcsList, ocr, options.PgsIsolateColors, options.Quiet, options.OcrAutoDetectAssaAlignment);
     }
 
     /// <summary>
@@ -106,53 +214,7 @@ internal static class ImageOcrLoader
         {
             foreach (var pid in parser.SubtitlePacketIds)
             {
-                var dvbSubtitles = parser.GetDvbSubtitles(pid);
-                if (dvbSubtitles.Count == 0)
-                {
-                    continue;
-                }
-
-                if (!options.Quiet)
-                {
-                    AnsiConsole.MarkupLine(ocr is null
-                        ? $"[dim]Extracting time codes from {dvbSubtitles.Count} DVB-sub image(s) (PID {pid}, no OCR)...[/]"
-                        : $"[dim]Running {ocr.Name} OCR on {dvbSubtitles.Count} DVB-sub image(s) (PID {pid})...[/]");
-                }
-
-                // Recognition is the slow part, so report it per image (issue #14267).
-                var showProgress = ocr is not null && !options.Quiet;
-                var subtitle = new Subtitle();
-
-                // ocr == null → time-codes-only: keep every entry that has an image, with
-                // empty text, without decoding a bitmap for recognition.
-                // Same antialiased binarisation as the PGS path (issue #12291).
-                Func<SKBitmap, SKBitmap>? isolate =
-                    options.PgsIsolateColors ? (b => VobSubColorIsolation.BinarizeForOcr(b)) : null;
-                var texts = ocr is null
-                    ? TimeCodesOnlyTexts(dvbSubtitles.Count, i => dvbSubtitles[i].GetBitmap())
-                    : RecognizeAll(
-                        ocr, dvbSubtitles.Count, i => dvbSubtitles[i].GetBitmap(),
-                        callerOwnsBitmap: false, isolate, quiet: !showProgress);
-
-                for (var i = 0; i < dvbSubtitles.Count; i++)
-                {
-                    var text = texts[i];
-                    if (text is null || (ocr is not null && string.IsNullOrWhiteSpace(text)))
-                    {
-                        continue;
-                    }
-
-                    subtitle.Paragraphs.Add(new LibSeParagraph(
-                        text, dvbSubtitles[i].StartMilliseconds, dvbSubtitles[i].EndMilliseconds));
-                }
-
-                if (showProgress)
-                {
-                    ProgressLine.Report("OCR", dvbSubtitles.Count, dvbSubtitles.Count);
-                    ProgressLine.Finish();
-                }
-
-                subtitle.Renumber();
+                var subtitle = RecognizeDvbSubtitles(ocr, parser.GetDvbSubtitles(pid), options, $"PID {pid}");
                 if (subtitle.Paragraphs.Count > 0)
                 {
                     results.Add((subtitle, pid));
@@ -167,6 +229,93 @@ internal static class ImageOcrLoader
     }
 
     /// <summary>
+    /// DVB bitmap subtitles of a Manzanita "private_stream_1" dump (type="dvb_subtitle") → text
+    /// via the configured OCR engine, or time codes only when
+    /// <see cref="ConversionOptions.TimeCodesOnly"/> is set.
+    /// </summary>
+    public static Subtitle LoadManzanitaDvbSub(string filePath, ConversionOptions options)
+    {
+        var parser = new ManzanitaTransportStreamParser();
+        parser.Parse(filePath);
+        var dvbSubtitles = parser.GetDvbSup();
+        if (dvbSubtitles.Count == 0)
+        {
+            return new Subtitle();
+        }
+
+        IOcrEngine? ocr = options.TimeCodesOnly ? null : OcrEngineFactory.Create(options);
+        try
+        {
+            return RecognizeDvbSubtitles(ocr, dvbSubtitles, options, "Manzanita");
+        }
+        finally
+        {
+            ocr?.Dispose();
+        }
+    }
+
+    private static Subtitle RecognizeDvbSubtitles(IOcrEngine? ocr, List<TransportStreamSubtitle> dvbSubtitles, ConversionOptions options, string sourceLabel)
+    {
+        var subtitle = new Subtitle();
+        if (dvbSubtitles.Count == 0)
+        {
+            return subtitle;
+        }
+
+        if (!options.Quiet)
+        {
+            AnsiConsole.MarkupLine(ocr is null
+                ? $"[dim]Extracting time codes from {dvbSubtitles.Count} DVB-sub image(s) ({sourceLabel}, no OCR)...[/]"
+                : $"[dim]Running {ocr.Name} OCR on {dvbSubtitles.Count} DVB-sub image(s) ({sourceLabel})...[/]");
+        }
+
+        // Recognition is the slow part, so report it per image (issue #14267).
+        var showProgress = ocr is not null && !options.Quiet;
+
+        // ocr == null → time-codes-only: keep every entry that has an image, with
+        // empty text, without decoding a bitmap for recognition.
+        // Same antialiased binarisation as the PGS path (issue #12291).
+        Func<SKBitmap, SKBitmap>? isolate =
+            options.PgsIsolateColors ? (b => VobSubColorIsolation.BinarizeForOcr(b)) : null;
+        var texts = ocr is null
+            ? TimeCodesOnlyTexts(dvbSubtitles.Count, i => dvbSubtitles[i].GetBitmap())
+            : RecognizeAll(
+                ocr, dvbSubtitles.Count, i => dvbSubtitles[i].GetBitmap(),
+                callerOwnsBitmap: false, isolate, quiet: !showProgress);
+
+        for (var i = 0; i < dvbSubtitles.Count; i++)
+        {
+            var text = texts[i];
+            if (text is null || (ocr is not null && string.IsNullOrWhiteSpace(text)))
+            {
+                continue;
+            }
+
+            var dvb = dvbSubtitles[i];
+            if (ocr is not null && options.OcrAutoDetectAssaAlignment)
+            {
+                var position = dvb.GetPosition();
+                var frame = dvb.GetScreenSize();
+                AddWithAlignment(
+                    subtitle, text, dvb.StartMilliseconds, dvb.EndMilliseconds, dvb.GetBitmap, callerOwnsBitmap: false,
+                    new SKPointI(position.Left, position.Top), new SKSizeI((int)frame.Width, (int)frame.Height));
+                continue;
+            }
+
+            subtitle.Paragraphs.Add(new LibSeParagraph(text, dvb.StartMilliseconds, dvb.EndMilliseconds));
+        }
+
+        if (showProgress)
+        {
+            ProgressLine.Report("OCR", dvbSubtitles.Count, dvbSubtitles.Count);
+            ProgressLine.Finish();
+        }
+
+        subtitle.Renumber();
+        return subtitle;
+    }
+
+    /// <summary>
     /// VobSub <c>.sub</c> + <c>.idx</c> pair → text via the configured OCR engine, or time
     /// codes only when <see cref="ConversionOptions.TimeCodesOnly"/> is set.
     /// </summary>
@@ -176,6 +325,26 @@ internal static class ImageOcrLoader
         // affects timing scale, which doesn't matter for OCR/time-code extraction.
         var items = BitmapSubtitleLoader.LoadVobSub(subPath, idxPath, isPal: true);
         return OcrBitmapItems(items, options, $"{items.Count} VobSub image(s)");
+    }
+
+    /// <summary>
+    /// DVD .sup file ("SP" packets) → text via the configured OCR engine, or time codes only
+    /// when <see cref="ConversionOptions.TimeCodesOnly"/> is set.
+    /// </summary>
+    /// <summary>
+    /// One PSP UMD Video subtitle stream → text via the configured OCR engine, or time codes
+    /// only when <see cref="ConversionOptions.TimeCodesOnly"/> is set.
+    /// </summary>
+    public static Subtitle LoadUmdVideo(List<Nikse.SubtitleEdit.Core.ContainerFormats.ProgramStream.UmdVideoSubtitle> pictures, int subStreamId, ConversionOptions options)
+    {
+        var items = BitmapSubtitleLoader.LoadUmdVideo(pictures);
+        return OcrBitmapItems(items, options, $"{items.Count} UMD Video image(s) (stream #{subStreamId - 0x80 + 1})");
+    }
+
+    public static Subtitle LoadSpDvdSup(string filePath, ConversionOptions options)
+    {
+        var items = BitmapSubtitleLoader.LoadSpDvdSup(filePath);
+        return OcrBitmapItems(items, options, $"{items.Count} DVD sup image(s)");
     }
 
     /// <summary>
@@ -258,7 +427,8 @@ internal static class ImageOcrLoader
                 AnsiConsole.MarkupLine($"[dim]Running {ocr.Name} OCR on {what}{isolationNote}...[/]");
             }
 
-            return BitmapItemsToSubtitle(items, ocr, options.VobSubIsolateColors, options.Quiet);
+            return BitmapItemsToSubtitle(
+                items, ocr, options.VobSubIsolateColors, options.Quiet, options.OcrAutoDetectAssaAlignment);
         }
         finally
         {
@@ -397,6 +567,47 @@ internal static class ImageOcrLoader
     }
 
     /// <summary>
+    /// <c>--ocr-auto-detect-assa-alignment</c>: adds a recognised text with the ASSA alignment
+    /// tag for where its image sits in <paramref name="frame"/> - the OCR window's logic, via
+    /// <see cref="OcrAssaAlignment"/>. Like the OCR window's OK button, a text whose lines got
+    /// different tags (a tall image with a line at the top and one at the bottom) becomes one
+    /// paragraph per alignment, all with the same time codes. An unknown frame leaves the text
+    /// untagged.
+    /// </summary>
+    /// <param name="rentBitmap">The image as it sits in the frame - never the colour-isolated copy.</param>
+    /// <param name="callerOwnsBitmap">False when <paramref name="rentBitmap"/> decodes a fresh bitmap we must release.</param>
+    internal static void AddWithAlignment(
+        Subtitle subtitle, string text, double startMilliseconds, double endMilliseconds,
+        Func<SKBitmap?> rentBitmap, bool callerOwnsBitmap, SKPointI position, SKSizeI frame)
+    {
+        var aligned = text;
+        if (frame.Width > 0 && frame.Height > 0)
+        {
+            var bitmap = rentBitmap();
+            try
+            {
+                // writeAn2Tag false: bottom-centre is the default, so it needs no tag (#12393).
+                aligned = OcrAssaAlignment.Detect(
+                    bitmap, position.X, position.Y, frame.Width, frame.Height, text, writeAn2Tag: false).Text;
+            }
+            finally
+            {
+                if (!callerOwnsBitmap)
+                {
+                    bitmap?.Dispose();
+                }
+            }
+        }
+
+        foreach (var group in OcrAssaAlignment.SplitTextByAlignmentGroups(aligned))
+        {
+            // The tagged lines are joined with "\n"; paragraphs use the platform line break.
+            var paragraphText = string.Join(Environment.NewLine, group.SplitToLines());
+            subtitle.Paragraphs.Add(new LibSeParagraph(paragraphText, startMilliseconds, endMilliseconds));
+        }
+    }
+
+    /// <summary>
     /// Time-codes-only: empty text for every index that has an image, null for the rest, so
     /// the entries that survive are exactly the ones a real OCR run would have kept.
     /// </summary>
@@ -424,10 +635,11 @@ internal static class ImageOcrLoader
     /// </summary>
     private static Subtitle BitmapItemsToSubtitle(
         IReadOnlyList<BitmapSubtitleLoader.BitmapSubtitleItem> items, IOcrEngine? ocr, bool isolateColors = false,
-        bool quiet = false)
+        bool quiet = false, bool detectAlignment = false)
     {
         var subtitle = new Subtitle();
         var blankCount = 0;
+        var noFrameCount = 0;
         // Time-codes-only mode is instant, so only a real OCR run reports progress (#14267).
         var showProgress = ocr is not null && !quiet;
 
@@ -440,7 +652,20 @@ internal static class ImageOcrLoader
         for (var i = 0; i < items.Count; i++)
         {
             var text = texts[i] ?? string.Empty;
-            if (ocr is null || !string.IsNullOrWhiteSpace(text))
+            if (ocr is not null && detectAlignment && !string.IsNullOrWhiteSpace(text))
+            {
+                var item = items[i];
+                var frame = new SKSizeI(item.ScreenWidth ?? 0, item.ScreenHeight ?? 0);
+                if (item.Position is null || frame.Width <= 0 || frame.Height <= 0)
+                {
+                    noFrameCount++;
+                }
+
+                AddWithAlignment(
+                    subtitle, text, item.StartTime.TotalMilliseconds, item.EndTime.TotalMilliseconds, () => item.Bitmap,
+                    callerOwnsBitmap: true, item.Position ?? default, item.Position is null ? default : frame);
+            }
+            else if (ocr is null || !string.IsNullOrWhiteSpace(text))
             {
                 subtitle.Paragraphs.Add(new LibSeParagraph(
                     text, items[i].StartTime.TotalMilliseconds, items[i].EndTime.TotalMilliseconds));
@@ -465,6 +690,12 @@ internal static class ImageOcrLoader
                 $"[yellow]Note: {blankCount} image(s) produced no OCR text and were dropped.[/]");
         }
 
+        if (noFrameCount > 0 && !quiet)
+        {
+            AnsiConsole.MarkupLine(
+                $"[yellow]Note: {noFrameCount} image(s) carry no position or video frame size, so no ASSA alignment was detected for them.[/]");
+        }
+
         subtitle.Renumber();
         return subtitle;
     }
@@ -476,7 +707,7 @@ internal static class ImageOcrLoader
     /// Entries whose bitmap is null (e.g. clear-screen commands) are skipped in both modes.
     /// </summary>
     private static Subtitle PcsListToSubtitle(List<BluRaySupParser.PcsData> pcsList, IOcrEngine? ocr,
-        bool isolateColors = false, bool quiet = false)
+        bool isolateColors = false, bool quiet = false, bool detectAlignment = false)
     {
         var subtitle = new Subtitle();
         // Time-codes-only mode is instant, so only a real OCR run reports progress (#14267).
@@ -499,12 +730,75 @@ internal static class ImageOcrLoader
                 continue;
             }
 
-            subtitle.Paragraphs.Add(new LibSeParagraph(text, pcsList[i].StartTime / 90.0, pcsList[i].EndTime / 90.0));
+            var pcs = pcsList[i];
+            if (ocr is not null && detectAlignment)
+            {
+                var position = pcs.GetPosition();
+                var frame = pcs.GetScreenSize();
+                AddWithAlignment(
+                    subtitle, text, pcs.StartTime / 90.0, pcs.EndTime / 90.0, pcs.GetBitmap, callerOwnsBitmap: false,
+                    new SKPointI(position.Left, position.Top), new SKSizeI((int)frame.Width, (int)frame.Height));
+                continue;
+            }
+
+            subtitle.Paragraphs.Add(new LibSeParagraph(text, pcs.StartTime / 90.0, pcs.EndTime / 90.0));
         }
 
         if (showProgress)
         {
             ProgressLine.Report("OCR", pcsList.Count, pcsList.Count);
+            ProgressLine.Finish();
+        }
+
+        subtitle.Renumber();
+        return subtitle;
+    }
+
+    /// <summary>
+    /// Turns HD-DVD sub pictures into a Subtitle - text per picture when <paramref name="ocr"/>
+    /// is non-null, otherwise timing only with empty text.
+    /// </summary>
+    private static Subtitle HdDvdPicturesToSubtitle(List<HdDvdSubPicture> pictures, IOcrEngine? ocr,
+        bool isolateColors = false, bool quiet = false, bool detectAlignment = false)
+    {
+        var subtitle = new Subtitle();
+        var showProgress = ocr is not null && !quiet;
+
+        // Like PGS, HD-DVD glyphs are a light fill with a dark outline on transparency.
+        Func<SKBitmap, SKBitmap>? isolate = isolateColors ? (b => VobSubColorIsolation.BinarizeForOcr(b)) : null;
+        var texts = ocr is null
+            ? Enumerable.Repeat<string?>(string.Empty, pictures.Count).ToArray()
+            : RecognizeAll(
+                ocr, pictures.Count, i => pictures[i].GetBitmap(),
+                callerOwnsBitmap: false, isolate, quiet: !showProgress);
+
+        // HD-DVD video is always 1920x1080; the stream itself doesn't say.
+        var frame = new SKSizeI(1920, 1080);
+        for (var i = 0; i < pictures.Count; i++)
+        {
+            var text = texts[i];
+            if (text is null || (ocr is not null && string.IsNullOrWhiteSpace(text)))
+            {
+                continue;
+            }
+
+            var picture = pictures[i];
+            if (ocr is not null && detectAlignment)
+            {
+                // ImagePosition is where the cropped bitmap sits, so it's only known after decoding.
+                using var bitmap = picture.GetBitmap();
+                AddWithAlignment(
+                    subtitle, text, picture.StartTime.TotalMilliseconds, picture.EndTime.TotalMilliseconds, () => bitmap,
+                    callerOwnsBitmap: true, picture.ImagePosition, frame);
+                continue;
+            }
+
+            subtitle.Paragraphs.Add(new LibSeParagraph(text, picture.StartTime.TotalMilliseconds, picture.EndTime.TotalMilliseconds));
+        }
+
+        if (showProgress)
+        {
+            ProgressLine.Report("OCR", pictures.Count, pictures.Count);
             ProgressLine.Finish();
         }
 

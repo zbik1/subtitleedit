@@ -195,11 +195,21 @@ namespace Nikse.SubtitleEdit.Logic.Media
         /// </summary>
         private static List<FilePickerFileType> MakeOpenSubtitleFilter(bool includeVideoFiles, bool includeSpreadsheets = false)
         {
+            // The main window's open (the one with the spreadsheet importer) also rips DVD subtitles
+            // from an IFO/VOB - listed there only, not in GetOpenSubtitleExtensions, which batch
+            // convert's folder scan uses too.
+            var subtitlePatterns = MakeOpenSubtitlePatterns(includeVideoFiles);
+            if (includeSpreadsheets)
+            {
+                subtitlePatterns.Add("*.ifo");
+                subtitlePatterns.Add("*.vob");
+            }
+
             var fileTypes = new List<FilePickerFileType>
             {
                 new FilePickerFileType(Se.Language.General.SubtitleFiles)
                 {
-                    Patterns = MakeOpenSubtitlePatterns(includeVideoFiles),
+                    Patterns = subtitlePatterns,
                 },
                 new FilePickerFileType(Se.Language.General.VideoFiles)
                 {
@@ -256,16 +266,26 @@ namespace Nikse.SubtitleEdit.Logic.Media
             AddExt(existingTypes, extensions, ".mks");
             AddExt(existingTypes, extensions, ".pac");
             AddExt(existingTypes, extensions, ".890");
+            AddExt(existingTypes, extensions, ".ezt");
             AddExt(existingTypes, extensions, ".sdb");
             AddExt(existingTypes, extensions, ".fpc");
             AddExt(existingTypes, extensions, ".dvbttx");
+            AddExt(existingTypes, extensions, ".1hd");
+            AddExt(existingTypes, extensions, ".2hd");
+            AddExt(existingTypes, extensions, ".1sd");
+            AddExt(existingTypes, extensions, ".2sd");
+            AddExt(existingTypes, extensions, ".prproj");
+            AddExt(existingTypes, extensions, ".subs"); // PSP UMD Video subtitle dump
 
             if (includeVideoFiles)
             {
                 AddExt(existingTypes, extensions, ".mkv");
                 AddExt(existingTypes, extensions, ".mp4");
                 AddExt(existingTypes, extensions, ".ts");
+                AddExt(existingTypes, extensions, ".mxf");
                 AddExt(existingTypes, extensions, ".sup");
+                AddExt(existingTypes, extensions, ".mps"); // PSP UMD Video
+                AddExt(existingTypes, extensions, ".pmf"); // PSP movie
             }
 
             return extensions;
@@ -342,7 +362,7 @@ namespace Nikse.SubtitleEdit.Logic.Media
             for (var attempt = 0; ; attempt++)
             {
                 // Use SaveFilePickerWithResultAsync instead of SaveFilePickerAsync
-                var result = await topLevel.StorageProvider.SaveFilePickerWithResultAsync(options);
+                var result = await NativePickers.SaveFilePickerWithResultAsync(topLevel, options);
 
                 if (result.File == null)
                 {
@@ -608,9 +628,12 @@ namespace Nikse.SubtitleEdit.Logic.Media
             };
             var fileTypes = new List<FilePickerFileType> { fileType };
 
+            // EBU STL is binary but saves through the same "Save as" path (SaveBinarySubtitle),
+            // so it belongs in the list like the text formats - it used to be reachable only by
+            // switching the toolbar format first.
             foreach (var format in SubtitleFormat.AllSubtitleFormats)
             {
-                if (format.IsTextBased && format.Name != currentFormat.Name)
+                if ((format.IsTextBased || format is Ebu) && format.Name != currentFormat.Name)
                 {
                     var patterns = new List<string>
                     {

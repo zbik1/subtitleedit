@@ -24,6 +24,7 @@ using Nikse.SubtitleEdit.Logic.ValueConverters;
 using Optris.Icons.Avalonia;
 using SkiaSharp;
 using System;
+using System.Globalization;
 using System.Collections;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -453,6 +454,15 @@ public static class UiUtil
         }
 
         return _focusedButtonBackgroundBrush;
+    }
+
+    /// <summary>
+    /// The label without its `_` access-key marker, for showing a button caption as plain text
+    /// (e.g. "_Done" as a batch row status, which showed the underscore).
+    /// </summary>
+    public static string RemoveAccessKey(string text)
+    {
+        return ParseAccessKey(text).Display;
     }
 
     // Parses a single `_` access-key marker out of a button label and returns the visible text plus
@@ -1256,136 +1266,127 @@ public static class UiUtil
         return link;
     }
 
-    public static TextBlock WithMarginRight(this TextBlock control, int marginRight)
+    public static TControl WithMarginRight<TControl>(this TControl control, int marginRight) where TControl : Layoutable
     {
         var m = control.Margin;
         control.Margin = new Thickness(m.Left, m.Top, marginRight, m.Bottom);
         return control;
     }
 
-    public static TextBox WithMarginRight(this TextBox control, int marginRight)
-    {
-        var m = control.Margin;
-        control.Margin = new Thickness(m.Left, m.Top, marginRight, m.Bottom);
-        return control;
-    }
-
-    public static TextBox WithMarginLeft(this TextBox control, int marginLeft)
+    public static TControl WithMarginLeft<TControl>(this TControl control, int marginLeft) where TControl : Layoutable
     {
         var m = control.Margin;
         control.Margin = new Thickness(marginLeft, m.Top, m.Right, m.Bottom);
         return control;
     }
 
-    public static TextBox WithMargin(this TextBox control, int margin)
+    public static TControl WithMargin<TControl>(this TControl control, int margin) where TControl : Layoutable
     {
         control.Margin = new Thickness(margin);
         return control;
     }
 
-    public static SplitButton WithMarginLeft(this SplitButton control, int marginLeft)
+    public static TControl WithMarginTop<TControl>(this TControl control, int marginTop) where TControl : Layoutable
     {
         var m = control.Margin;
-        control.Margin = new Thickness(marginLeft, m.Top, m.Right, m.Bottom);
+        control.Margin = new Thickness(m.Left, marginTop, m.Right, m.Bottom);
         return control;
     }
 
-    public static TextBox WithHeight(this TextBox control, double height)
-    {
-        var m = control.Margin;
-        control.Height = height;
-        return control;
-    }
-
-    public static TextBlock WithMarginLeft(this TextBlock control, int marginLeft)
-    {
-        var m = control.Margin;
-        control.Margin = new Thickness(marginLeft, m.Top, m.Right, m.Bottom);
-        return control;
-    }
-
-    public static TextBlock WithAlignmentLeft(this TextBlock control)
-    {
-        control.HorizontalAlignment = HorizontalAlignment.Left;
-        return control;
-    }
-
-    public static TextBlock WithAlignmentTop(this TextBlock control)
-    {
-        control.VerticalAlignment = VerticalAlignment.Top;
-        return control;
-    }
-
-    public static TextBlock WithMarginBottom(this TextBlock control, int marginBottom)
+    public static TControl WithMarginBottom<TControl>(this TControl control, int marginBottom) where TControl : Layoutable
     {
         var m = control.Margin;
         control.Margin = new Thickness(m.Left, m.Top, m.Right, marginBottom);
         return control;
     }
 
-    public static Label WithMarginBottom(this Label control, int marginBottom)
-    {
-        var m = control.Margin;
-        control.Margin = new Thickness(m.Left, m.Top, m.Right, marginBottom);
-        return control;
-    }
-
-    public static Border WithMarginBottom(this Border control, int marginBottom)
-    {
-        var m = control.Margin;
-        control.Margin = new Thickness(m.Left, m.Top, m.Right, marginBottom);
-        return control;
-    }
-
-    public static Border WithMinWidth(this Border control, int minWidth)
-    {
-        control.MinWidth = minWidth;
-        return control;
-    }
-
-    public static Border WithMinHeight(this Border control, int minHeight)
-    {
-        control.MinHeight = minHeight;
-        return control;
-    }
-
-    public static Border WithHeight(this Border control, int height)
-    {
-        control.Height = height;
-        return control;
-    }
-
-    public static Border WithMarginRight(this Border control, int marginRight)
-    {
-        var m = control.Margin;
-        control.Margin = new Thickness(m.Left, m.Top, marginRight, m.Bottom);
-        return control;
-    }
-
-    public static TextBlock WithMarginTop(this TextBlock control, int topBottom)
-    {
-        var m = control.Margin;
-        control.Margin = new Thickness(m.Left, topBottom, m.Right, m.Bottom);
-        return control;
-    }
-
-    public static ComboBox WithMarginBottom(this ComboBox control, int marginBottom)
-    {
-        var m = control.Margin;
-        control.Margin = new Thickness(m.Left, m.Top, m.Right, marginBottom);
-        return control;
-    }
-
-    public static ComboBox WithMargin(this ComboBox control, int left, int top, int right, int bottom)
+    public static TControl WithMargin<TControl>(this TControl control, int left, int top, int right, int bottom) where TControl : Layoutable
     {
         control.Margin = new Thickness(left, top, right, bottom);
         return control;
     }
 
-    public static Button WithMarginBottom(this Button control, int marginBottom)
+    public static TControl WithWidth<TControl>(this TControl control, double width) where TControl : Layoutable
     {
-        var m = control.Margin;
-        control.Margin = new Thickness(m.Left, m.Top, m.Right, marginBottom);
+        control.Width = width;
+        return control;
+    }
+
+    public static TControl WithHeight<TControl>(this TControl control, double height) where TControl : Layoutable
+    {
+        control.Height = height;
+        return control;
+    }
+
+    public static TControl WithMinWidth<TControl>(this TControl control, double minWidth) where TControl : Layoutable
+    {
+        control.MinWidth = minWidth;
+        return control;
+    }
+
+    public static TControl WithMinHeight<TControl>(this TControl control, double minHeight) where TControl : Layoutable
+    {
+        control.MinHeight = minHeight;
+        return control;
+    }
+
+    public static TControl WithAlignmentLeft<TControl>(this TControl control) where TControl : Layoutable
+    {
+        control.HorizontalAlignment = HorizontalAlignment.Left;
+        return control;
+    }
+
+    public static TControl WithAlignmentRight<TControl>(this TControl control) where TControl : Layoutable
+    {
+        control.HorizontalAlignment = HorizontalAlignment.Right;
+        return control;
+    }
+
+    public static TControl WithAlignmentCenter<TControl>(this TControl control) where TControl : Layoutable
+    {
+        control.HorizontalAlignment = HorizontalAlignment.Center;
+        return control;
+    }
+
+    public static TControl WithAlignmentTop<TControl>(this TControl control) where TControl : Layoutable
+    {
+        control.VerticalAlignment = VerticalAlignment.Top;
+        return control;
+    }
+
+    public static TControl WithAlignmentBottom<TControl>(this TControl control) where TControl : Layoutable
+    {
+        control.VerticalAlignment = VerticalAlignment.Bottom;
+        return control;
+    }
+
+    public static TControl WithLeftAlignment<TControl>(this TControl control) where TControl : Layoutable
+    {
+        control.HorizontalAlignment = HorizontalAlignment.Left;
+        return control;
+    }
+
+    public static TControl WithRightAlignment<TControl>(this TControl control) where TControl : Layoutable
+    {
+        control.HorizontalAlignment = HorizontalAlignment.Right;
+        return control;
+    }
+
+    public static TControl WithTopAlignment<TControl>(this TControl control) where TControl : Layoutable
+    {
+        control.VerticalAlignment = VerticalAlignment.Top;
+        return control;
+    }
+
+    public static TControl WithCenterAlignment<TControl>(this TControl control) where TControl : Layoutable
+    {
+        control.VerticalAlignment = VerticalAlignment.Center;
+        return control;
+    }
+
+    public static TControl WithBottomAlignment<TControl>(this TControl control) where TControl : Layoutable
+    {
+        control.VerticalAlignment = VerticalAlignment.Bottom;
         return control;
     }
 
@@ -1395,45 +1396,9 @@ public static class UiUtil
         return control;
     }
 
-    public static Button WithLeftAlignment(this Button control)
-    {
-        control.HorizontalAlignment = HorizontalAlignment.Left;
-        return control;
-    }
-
-    public static SplitButton WithLeftAlignment(this SplitButton control)
-    {
-        control.HorizontalAlignment = HorizontalAlignment.Left;
-        return control;
-    }
-
-    public static Button WithRightAlignment(this Button control)
-    {
-        control.HorizontalAlignment = HorizontalAlignment.Right;
-        return control;
-    }
-
-    public static Button WithTopAlignment(this Button control)
-    {
-        control.VerticalAlignment = VerticalAlignment.Top;
-        return control;
-    }
-
-    public static Button WithCenterAlignment(this Button control)
-    {
-        control.VerticalAlignment = VerticalAlignment.Center;
-        return control;
-    }
-
-    public static Button WithBottomAlignment(this Button control)
-    {
-        control.VerticalAlignment = VerticalAlignment.Bottom;
-        return control;
-    }
-
     public static Button WithIconRight(this Button control, string iconName)
     {
-        var label = new TextBlock() { Text = control.Content?.ToString(), Padding = new Thickness(0, 0, 4, 0) };
+        var (label, accessibleName) = MakeIconButtonLabel(DetachContent(control), new Thickness(0, 0, 4, 0));
         var image = new ContentControl();
         Attached.SetIcon(image, iconName);
         var stackPanelApplyFixes = new StackPanel
@@ -1445,9 +1410,9 @@ public static class UiUtil
         control.Content = stackPanelApplyFixes;
 
         // Same as WithIconLeft: the panel content has no UIA name of its own, keep the text.
-        if (!string.IsNullOrEmpty(label.Text))
+        if (!string.IsNullOrEmpty(accessibleName))
         {
-            AutomationProperties.SetName(control, label.Text);
+            AutomationProperties.SetName(control, accessibleName);
         }
 
         return control;
@@ -1455,7 +1420,7 @@ public static class UiUtil
 
     public static Button WithIconLeft(this Button control, string iconName)
     {
-        var label = new TextBlock() { Text = control.Content?.ToString(), Padding = new Thickness(4, 0, 0, 0) };
+        var (label, accessibleName) = MakeIconButtonLabel(DetachContent(control), new Thickness(4, 0, 0, 0));
         var image = new ContentControl();
         Attached.SetIcon(image, iconName);
         var stackPanelApplyFixes = new StackPanel
@@ -1469,12 +1434,40 @@ public static class UiUtil
         // Replacing the text content with an icon+text panel loses the button's computed UIA
         // name - keep the original text as the accessible name so screen readers still
         // announce it (#11745/#12087 accessibility work).
-        if (!string.IsNullOrEmpty(label.Text))
+        if (!string.IsNullOrEmpty(accessibleName))
         {
-            AutomationProperties.SetName(control, label.Text);
+            AutomationProperties.SetName(control, accessibleName);
         }
 
         return control;
+    }
+
+    /// <summary>
+    /// The label for an icon+text button. A button made by <see cref="MakeButton(string, IRelayCommand?, object?)"/>
+    /// from a label with an access key holds an <see cref="AccessText"/>, not a string: keep that
+    /// control so the Alt underline survives - flattening it with ToString() would print the type
+    /// name as the caption. The accessible name is the caption without the `_` marker.
+    /// </summary>
+    // An AccessText content is a logical child of the button; it has to leave the button before the
+    // icon panel adopts it, or it ends up in the panel with no logical parent and the window
+    // throws while attaching to the tree.
+    private static object? DetachContent(Button control)
+    {
+        var content = control.Content;
+        control.Content = null;
+        return content;
+    }
+
+    private static (TextBlock Label, string? AccessibleName) MakeIconButtonLabel(object? content, Thickness padding)
+    {
+        if (content is AccessText accessText)
+        {
+            accessText.Padding = padding;
+            return (accessText, ParseAccessKey(accessText.Text ?? string.Empty).Display);
+        }
+
+        var text = content?.ToString();
+        return (new TextBlock { Text = text, Padding = padding }, text);
     }
 
     public static Button WithCommandParameter<T>(this Button control, T parameter)
@@ -1512,18 +1505,6 @@ public static class UiUtil
         // (#12087). Bind the caption (or a fuller name) as the accessible name instead.
         control.Bind(AutomationProperties.NameProperty, new Binding { Path = accessibleNamePropertyPath ?? textPropertyPath });
 
-        return control;
-    }
-
-    public static ComboBox WithLeftAlignment(this ComboBox control)
-    {
-        control.HorizontalAlignment = HorizontalAlignment.Left;
-        return control;
-    }
-
-    public static ComboBox WithTopAlignment(this ComboBox control)
-    {
-        control.VerticalAlignment = VerticalAlignment.Top;
         return control;
     }
 
@@ -1805,6 +1786,23 @@ public static class UiUtil
         return control;
     }
 
+    /// <summary>
+    /// For a combo box whose items are frame rates as <see cref="double"/>: print them with a
+    /// decimal point ("23.976") whatever the OS decimal separator, like the toolbar frame rate
+    /// combo (which holds invariant strings) - a bare double item would show "23,976" on a
+    /// comma-decimal locale. Applies to the dropdown items and the selection box alike.
+    /// </summary>
+    public static ComboBox WithFrameRateDisplay(this ComboBox control)
+    {
+        control.DisplayMemberBinding = new Binding(".")
+        {
+            StringFormat = "{0:0.###}",
+            ConverterCulture = CultureInfo.InvariantCulture,
+        };
+
+        return control;
+    }
+
     public static ComboBox WithBindItemsSource(this ComboBox control, string itemsSourcePropertyBinding)
     {
         control.Bind(ItemsControl.ItemsSourceProperty, new Binding
@@ -1812,12 +1810,6 @@ public static class UiUtil
             Path = itemsSourcePropertyBinding,
         });
 
-        return control;
-    }
-
-    public static TextBlock WithMargin(this TextBlock control, int margin)
-    {
-        control.Margin = new Thickness(margin);
         return control;
     }
 
@@ -1854,59 +1846,9 @@ public static class UiUtil
         return control;
     }
 
-    public static StackPanel WithMarginTop(this StackPanel control, int marginTop)
-    {
-        var m = control.Margin;
-        control.Margin = new Thickness(m.Left, marginTop, m.Right, m.Bottom);
-        return control;
-    }
-
-    public static StackPanel WithMarginBottom(this StackPanel control, int marginBottom)
-    {
-        var m = control.Margin;
-        control.Margin = new Thickness(m.Left, m.Top, m.Right, marginBottom);
-        return control;
-    }
-
-    public static StackPanel WithAlignmentLeft(this StackPanel control)
-    {
-        control.HorizontalAlignment = HorizontalAlignment.Left;
-        return control;
-    }
-
     public static StackPanel WithSpacing(this StackPanel control, int spacing)
     {
         control.Spacing = spacing;
-        return control;
-    }
-
-    public static StackPanel WithAlignmentTop(this StackPanel control)
-    {
-        control.VerticalAlignment = VerticalAlignment.Top;
-        return control;
-    }
-
-    public static Label WithAlignmentTop(this Label control)
-    {
-        control.VerticalAlignment = VerticalAlignment.Top;
-        return control;
-    }
-
-    public static Label WithAlignmentBottom(this Label control)
-    {
-        control.VerticalAlignment = VerticalAlignment.Bottom;
-        return control;
-    }
-
-    public static Label WithAlignmentRight(this Label control)
-    {
-        control.HorizontalAlignment = HorizontalAlignment.Right;
-        return control;
-    }
-
-    public static Label WithAlignmentCenter(this Label control)
-    {
-        control.HorizontalAlignment = HorizontalAlignment.Center;
         return control;
     }
 
@@ -1922,42 +1864,9 @@ public static class UiUtil
         return control;
     }
 
-    public static Label WithMarginLeft(this Label control, int marginLeft)
-    {
-        var m = control.Margin;
-        control.Margin = new Thickness(marginLeft, m.Top, m.Right, m.Bottom);
-        return control;
-    }
-
     public static Label WithOpacity(this Label control, double opacity)
     {
         control.Opacity = opacity;
-        return control;
-    }
-
-    public static Label WithMinWidth(this Label control, int minWidth)
-    {
-        control.MinWidth = minWidth;
-        return control;
-    }
-
-    public static Label WithMinHeight(this Label control, int minHeight)
-    {
-        control.MinHeight = minHeight;
-        return control;
-    }
-
-    public static Label WithMarginRight(this Label control, int marginRight)
-    {
-        var m = control.Margin;
-        control.Margin = new Thickness(m.Left, m.Top, marginRight, m.Bottom);
-        return control;
-    }
-
-    public static Label WithMarginTop(this Label control, int marginTop)
-    {
-        var m = control.Margin;
-        control.Margin = new Thickness(m.Left, marginTop, m.Right, m.Bottom);
         return control;
     }
 
@@ -1967,73 +1876,9 @@ public static class UiUtil
         return control;
     }
 
-    public static ComboBox WithMarginTop(this ComboBox control, int marginTop)
-    {
-        var m = control.Margin;
-        control.Margin = new Thickness(m.Left, marginTop, m.Right, m.Bottom);
-        return control;
-    }
-
-    public static ComboBox WithMarginLeft(this ComboBox control, int marginLeft)
-    {
-        var m = control.Margin;
-        control.Margin = new Thickness(marginLeft, m.Top, m.Right, m.Bottom);
-        return control;
-    }
-
-    public static ComboBox WithMarginRight(this ComboBox control, int marginRight)
-    {
-        var m = control.Margin;
-        control.Margin = new Thickness(m.Left, m.Top, marginRight, m.Bottom);
-        return control;
-    }
-
-    public static Button WithMarginTop(this Button control, int marginTop)
-    {
-        var m = control.Margin;
-        control.Margin = new Thickness(m.Left, marginTop, m.Right, m.Bottom);
-        return control;
-    }
-
-    public static SplitButton WithMarginTop(this SplitButton control, int marginTop)
-    {
-        var m = control.Margin;
-        control.Margin = new Thickness(m.Left, marginTop, m.Right, m.Bottom);
-        return control;
-    }
-
     public static Button WithFontSize(this Button control, double fontSize)
     {
         control.FontSize = ScaledFontSize(fontSize);
-        return control;
-    }
-
-    public static Button WithMarginLeft(this Button control, int marginLeft)
-    {
-        var m = control.Margin;
-        control.Margin = new Thickness(marginLeft, m.Top, m.Right, m.Bottom);
-        return control;
-    }
-
-
-    public static CheckBox WithMarginLeft(this CheckBox control, int marginLeft)
-    {
-        var m = control.Margin;
-        control.Margin = new Thickness(marginLeft, m.Top, m.Right, m.Bottom);
-        return control;
-    }
-
-    public static Button WithMarginRight(this Button control, int marginRight)
-    {
-        var m = control.Margin;
-        control.Margin = new Thickness(m.Left, m.Top, marginRight, m.Bottom);
-        return control;
-    }
-
-    public static CheckBox WithMarginRight(this CheckBox control, int marginRight)
-    {
-        var m = control.Margin;
-        control.Margin = new Thickness(m.Left, m.Top, marginRight, m.Bottom);
         return control;
     }
 
@@ -2045,33 +1890,15 @@ public static class UiUtil
         return control;
     }
 
-    public static Button WithMargin(this Button control, int margin)
-    {
-        control.Margin = new Thickness(margin);
-        return control;
-    }
-
     public static Button WithPadding(this Button control, int padding)
     {
         control.Padding = new Thickness(padding);
         return control;
     }
 
-    public static Button WithMargin(this Button control, int left, int top, int right, int bottom)
-    {
-        control.Margin = new Thickness(left, top, right, bottom);
-        return control;
-    }
-
     public static Button WithBold(this Button control)
     {
         control.FontWeight = FontWeight.Bold;
-        return control;
-    }
-
-    public static TextBlock WithMinwidth(this TextBlock control, int width)
-    {
-        control.MinWidth = width;
         return control;
     }
 
@@ -2151,39 +1978,9 @@ public static class UiUtil
         return control;
     }
 
-    public static Button WithMinWidth(this Button control, int width)
-    {
-        control.MinWidth = width;
-        return control;
-    }
-
-    public static SplitButton WithMinWidth(this SplitButton control, int width)
-    {
-        control.MinWidth = width;
-        return control;
-    }
-
-    public static Button WithMinHeight(this Button control, int height)
-    {
-        control.MinHeight = height;
-        return control;
-    }
-
     public static Button WithParameter(this Button control, object parameter)
     {
         control.CommandParameter = parameter;
-        return control;
-    }
-
-    public static ComboBox WithMinWidth(this ComboBox control, int width)
-    {
-        control.MinWidth = width;
-        return control;
-    }
-
-    public static ComboBox WithWidth(this ComboBox control, int width)
-    {
-        control.Width = width;
         return control;
     }
 
@@ -2780,6 +2577,7 @@ public static class UiUtil
             Maximum = max,
             Increment = 0.01m,
             FormatString = "F2", // Force two decimals
+            TextConverter = new NumericUpDownDecimalTextConverter("F2"),
             Foreground = GetTextColor(),
         };
 
@@ -2820,7 +2618,8 @@ public static class UiUtil
             Minimum = min,
             Maximum = max,
             Increment = 0.01m,
-            FormatString = "F3" // Force three decimals
+            FormatString = "F3", // Force three decimals
+            TextConverter = new NumericUpDownDecimalTextConverter("F3"),
         };
 
         if (propertyValuePath != null)
@@ -2860,6 +2659,7 @@ public static class UiUtil
             Maximum = max,
             Increment = 0.1m,
             FormatString = "F1",
+            TextConverter = new NumericUpDownDecimalTextConverter("F1"),
         };
 
         if (propertyValuePath != null)
@@ -3183,71 +2983,65 @@ public static class UiUtil
         }
     }
 
+    private static Styles? _uiFontStyles;
+
     public static void SetFontName(string fontName)
     {
-        if (Application.Current == null || string.IsNullOrEmpty(Se.Settings.Appearance.FontName))
+        if (Application.Current == null)
         {
             return;
         }
 
-        Application.Current.Styles.Add(new Style(x => x.OfType<TextBlock>())
+        // Replace (not append) the font styles, so Settings OK/Apply does not pile up styles and
+        // switching back to the default font takes effect without a restart.
+        if (_uiFontStyles != null)
+        {
+            Application.Current.Styles.Remove(_uiFontStyles);
+            _uiFontStyles = null;
+        }
+
+        if (string.IsNullOrEmpty(fontName))
+        {
+            return;
+        }
+
+        var fontFamily = FontFamilyHelper.Make(fontName);
+        var styles = new Styles();
+
+        // Set the font on windows and popup roots only and let it inherit down: CheckBox/RadioButton/
+        // ToggleSwitch/TabItem etc. render plain string content without a TextBlock, so a TextBlock
+        // style alone misses them (#15255). Do not style every TemplatedControl - that also hits
+        // template parts like a TextBox's ScrollViewer and cuts off a font set locally on the control
+        // (e.g. the subtitle text box font), so the TextPresenter fell back to the UI font.
+        styles.Add(new Style(x => x.Is<TopLevel>())
         {
             Setters =
             {
-                new Setter(TextBlock.FontFamilyProperty, FontFamilyHelper.Make(fontName)),
+                new Setter(TopLevel.FontFamilyProperty, fontFamily),
             }
         });
 
-        Application.Current.Styles.Add(new Style(x => x.OfType<TextBox>())
+        styles.Add(new Style(x => x.Is<TextBlock>())
         {
             Setters =
             {
-                new Setter(TextBox.FontFamilyProperty, FontFamilyHelper.Make(fontName)),
-            }
-        });
-
-        Application.Current.Styles.Add(new Style(x => x.OfType<Button>())
-        {
-            Setters =
-            {
-                new Setter(Button.FontFamilyProperty, FontFamilyHelper.Make(fontName)),
-            }
-        });
-
-        Application.Current.Styles.Add(new Style(x => x.OfType<Avalonia.Controls.MenuItem>())
-        {
-            Setters =
-            {
-                new Setter(Avalonia.Controls.MenuItem.FontFamilyProperty, FontFamilyHelper.Make(fontName)),
-            }
-        });
-
-        Application.Current.Styles.Add(new Style(x => x.OfType<Label>())
-        {
-            Setters =
-            {
-                new Setter(Label.FontFamilyProperty, FontFamilyHelper.Make(fontName)),
-            }
-        });
-
-        Application.Current.Styles.Add(new Style(x => x.OfType<ComboBox>())
-        {
-            Setters =
-            {
-                new Setter(ComboBox.FontFamilyProperty, FontFamilyHelper.Make(fontName)),
+                new Setter(TextBlock.FontFamilyProperty, fontFamily),
             }
         });
 
         // The source editor (source view, batch convert ASSA) draws its own text, so it is not
-        // covered by the TextBox style above and would stay in Avalonia's default sans (#14457).
+        // covered by the styles above and would stay in Avalonia's default sans (#14457).
         // The format preview sets a monospace family locally, which wins over this style.
-        Application.Current.Styles.Add(new Style(x => x.OfType<SyntaxTextEditor>())
+        styles.Add(new Style(x => x.OfType<SyntaxTextEditor>())
         {
             Setters =
             {
-                new Setter(SyntaxTextEditor.FontFamilyProperty, FontFamilyHelper.Make(fontName)),
+                new Setter(SyntaxTextEditor.FontFamilyProperty, fontFamily),
             }
         });
+
+        _uiFontStyles = styles;
+        Application.Current.Styles.Add(styles);
     }
 
     public static StackPanel MakeHorizontalPanel(params Control[] controls)
@@ -3380,6 +3174,19 @@ public static class UiUtil
     private static int _subtitleFileNameInTitleSuppressions;
 
     /// <summary>
+    /// Session-only screen privacy mode (#15300), cycled via a shortcut so a screen recording or
+    /// screenshot does not reveal what is being worked on:
+    /// <see cref="ScreenPrivacyLevel.HideFileNames"/> keeps subtitle and video file names out of
+    /// the main window title, dialog titles and the video player;
+    /// <see cref="ScreenPrivacyLevel.HideFileNamesAndTexts"/> also blurs/hides the subtitle text.
+    /// </summary>
+    internal static ScreenPrivacyLevel ScreenPrivacy { get; set; }
+
+    internal static bool HideFileNames => ScreenPrivacy != ScreenPrivacyLevel.Off;
+
+    internal static bool HideTexts => ScreenPrivacy == ScreenPrivacyLevel.HideFileNamesAndTexts;
+
+    /// <summary>
     /// Suppresses the file-name suffix for the dialogs opened inside the returned scope. Batch
     /// convert reuses main-window dialogs as settings editors over a whole list of files - naming
     /// the main window's subtitle in their title bar claims a file they have nothing to do with.
@@ -3409,13 +3216,27 @@ public static class UiUtil
     }
 
     /// <summary>
+    /// A dialog title made from a "Title - {0}" format and a file name. With screen privacy on,
+    /// the file name is left out, as <see cref="MakeWindowTitle"/> does (#15300).
+    /// </summary>
+    internal static string FormatTitleWithFileName(string format, string fileName)
+    {
+        if (!HideFileNames)
+        {
+            return string.Format(format, fileName);
+        }
+
+        return string.Format(format, string.Empty).Trim().TrimEnd('-', ':').Trim();
+    }
+
+    /// <summary>
     /// Window title with the current subtitle file name appended, e.g. "Auto-translate - my movie.srt".
     /// The plain title is returned unchanged when no subtitle file is open, and inside a
     /// <see cref="SuppressSubtitleFileNameInTitle"/> scope.
     /// </summary>
     internal static string MakeWindowTitle(string title)
     {
-        if (_subtitleFileNameInTitleSuppressions > 0)
+        if (_subtitleFileNameInTitleSuppressions > 0 || HideFileNames)
         {
             return title;
         }

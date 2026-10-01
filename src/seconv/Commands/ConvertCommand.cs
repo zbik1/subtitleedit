@@ -133,8 +133,12 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
         public bool NoVobSubIsolateColors { get; init; }
 
         [CommandOption("--no-pgs-isolate-colors|--nopgsisolatecolors")]
-        [Description("Disable PGS/DVB-sub OCR colour isolation (on by default, except for --ocr-engine:applevision)")]
+        [Description("Disable PGS/DVB-sub OCR colour isolation (on by default, except for --ocr-engine:applevision, nocr and binaryocr)")]
         public bool NoPgsIsolateColors { get; init; }
+
+        [CommandOption("--ocr-auto-detect-assa-alignment|--ocrautodetectassaalignment")]
+        [Description("OCR: add an ASSA alignment tag ({\\an8} = top centre, ...) from where each image sits in the video frame - same as 'Auto-detect ASSA alignment' in the OCR window. Bottom-centre lines get no tag")]
+        public bool OcrAutoDetectAssaAlignment { get; init; }
 
         [CommandOption("--ollama-url")]
         [Description("Ollama API endpoint (default: http://localhost:11434/api/chat)")]
@@ -188,6 +192,10 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
         [Description("Overwrite existing files")]
         public bool Overwrite { get; init; }
 
+        [CommandOption("--no-language-suffix|--nolanguagesuffix")]
+        [Description("Do not insert the language code before the extension (movie.srt instead of movie.en.srt) - with --overwrite and --translate-to the source file is translated in place")]
+        public bool NoLanguageSuffix { get; init; }
+
         [CommandOption("--keep-timestamp|--keep-timestamps")]
         [Description("Give output files the source file's modified/created date instead of now")]
         public bool KeepTimestamp { get; init; }
@@ -195,6 +203,10 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
         [CommandOption("--pac-codepage")]
         [Description("PAC code page")]
         public string? PacCodepage { get; init; }
+
+        [CommandOption("--pac-secondary-codepage")]
+        [Description("PAC secondary code page, for lines in another script (e.g. Cyrillic lines in a Hebrew file)")]
+        public string? PacSecondaryCodepage { get; init; }
 
         [CommandOption("--profile")]
         [Description("Profile name")]
@@ -759,6 +771,19 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
                 }
             }
 
+            int? pacSecondaryCodePage = null;
+            if (!string.IsNullOrWhiteSpace(settings.PacSecondaryCodepage))
+            {
+                try
+                {
+                    pacSecondaryCodePage = PacCodepageParser.Parse(settings.PacSecondaryCodepage);
+                }
+                catch (FormatException ex)
+                {
+                    return Fail(settings, ex.Message);
+                }
+            }
+
             // Create conversion options
             var options = new ConversionOptions
             {
@@ -773,6 +798,7 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
                 Fps = settings.Fps,
                 TargetFps = settings.TargetFps,
                 Overwrite = settings.Overwrite,
+                NoLanguageSuffix = settings.NoLanguageSuffix,
                 KeepTimestamp = settings.KeepTimestamp,
                 Operations = operations,
                 FixCommonErrorsRules = fceRules,
@@ -791,6 +817,7 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
                 ImageStyle = imageStyle,
                 AssaStyleFile = settings.AssaStyleFile,
                 PacCodePage = pacCodePage,
+                PacSecondaryCodePage = pacSecondaryCodePage,
                 EbuHeaderFile = settings.EbuHeaderFile,
                 MultipleReplaceFile = settings.MultipleReplace,
                 CustomFormatFile = settings.CustomFormat,
@@ -812,8 +839,12 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
                 // Apple Vision reads the original PGS/DVB-sub images better than binarised ones -
                 // binarising costs it umlauts and trailing punctuation - and the GUI never
                 // binarises for it either, so isolation stays off for that engine.
+                // nOCR and BinaryOCR split letters on the alpha channel of the original image
+                // (like the GUI's nOCR/BinaryOCR loops); the opaque black-on-white isolated
+                // bitmap leaves nothing to split, so every line came out as "*".
                 PgsIsolateColors = !settings.NoPgsIsolateColors &&
-                                   settings.OcrEngine?.Trim().ToLowerInvariant() is not ("applevision" or "apple-vision"),
+                                   settings.OcrEngine?.Trim().ToLowerInvariant() is not ("applevision" or "apple-vision" or "nocr" or "binaryocr" or "binary"),
+                OcrAutoDetectAssaAlignment = settings.OcrAutoDetectAssaAlignment,
                 OllamaUrl = settings.OllamaUrl,
                 OllamaModel = settings.OllamaModel,
                 OcrUrl = settings.OcrUrl,

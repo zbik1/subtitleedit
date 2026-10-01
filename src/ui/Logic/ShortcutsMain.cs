@@ -506,12 +506,14 @@ public static class ShortcutsMain
         { nameof(MainViewModel.ExtendPreviousEndToSelectedStartCommand),  Se.Language.General.ExtendPreviousEndToSelectedStart },
         { nameof(MainViewModel.ExtendNextStartToSelectedEndCommand),  Se.Language.General.ExtendNextStartToSelectedEnd },
         { nameof(MainViewModel.ToggleLockTimeCodesCommand), Se.Language.Options.Shortcuts.ToggleLockTimeCodes },
+        { nameof(MainViewModel.ToggleScreenPrivacyCommand), Se.Language.Options.Shortcuts.ToggleScreenPrivacy },
         { nameof(MainViewModel.ShowHelpCommand), Se.Language.General.Help },
         { nameof(MainViewModel.ShowSourceViewCommand), Se.Language.Options.Shortcuts.SourceView },
         { nameof(MainViewModel.MergeWithLineBeforeCommand), Se.Language.General.MergeWithLineBeforeAndAutoBreak },
         { nameof(MainViewModel.MergeWithLineAfterCommand), Se.Language.General.MergeWithLineAfterAndAutoBreak },
         { nameof(MainViewModel.MergeWithLineBeforeKeepBreaksCommand), Se.Language.General.MergeWithLineBeforeKeepBreaks },
         { nameof(MainViewModel.MergeWithLineAfterKeepBreaksCommand), Se.Language.General.MergeWithLineAfterKeepBreaks },
+        { nameof(MainViewModel.MergeWithLineAfterAndUnbreakCommand), Se.Language.General.MergeWithLineAfterAndUnbreak },
         { nameof(MainViewModel.MergeWithLineBeforeAsDialogCommand), Se.Language.Options.Shortcuts.MergeWithLineBeforeAsDialog },
         { nameof(MainViewModel.MergeWithLineAfterAsDialogCommand), Se.Language.Options.Shortcuts.MergeWithLineAfterAsDialog },
         { nameof(MainViewModel.ToggleDialogDashesCommand), Se.Language.Options.Shortcuts.ToggleDialogDashes },
@@ -620,6 +622,17 @@ public static class ShortcutsMain
         { nameof(MainViewModel.SetActor9Command), string.Format(Se.Language.Options.Shortcuts.SetActorX, 9) },
         { nameof(MainViewModel.SetActor10Command), string.Format(Se.Language.Options.Shortcuts.SetActorX, 10) },
         { nameof(MainViewModel.ShowActorPickerCommand), Se.Language.General.SetActorDotDotDot },
+        { nameof(MainViewModel.ShowStylePickerCommand), Se.Language.General.SetStyleDotDotDot },
+        { nameof(MainViewModel.SetStyle1Command), string.Format(Se.Language.Options.Shortcuts.SetStyleX, 1) },
+        { nameof(MainViewModel.SetStyle2Command), string.Format(Se.Language.Options.Shortcuts.SetStyleX, 2) },
+        { nameof(MainViewModel.SetStyle3Command), string.Format(Se.Language.Options.Shortcuts.SetStyleX, 3) },
+        { nameof(MainViewModel.SetStyle4Command), string.Format(Se.Language.Options.Shortcuts.SetStyleX, 4) },
+        { nameof(MainViewModel.SetStyle5Command), string.Format(Se.Language.Options.Shortcuts.SetStyleX, 5) },
+        { nameof(MainViewModel.SetStyle6Command), string.Format(Se.Language.Options.Shortcuts.SetStyleX, 6) },
+        { nameof(MainViewModel.SetStyle7Command), string.Format(Se.Language.Options.Shortcuts.SetStyleX, 7) },
+        { nameof(MainViewModel.SetStyle8Command), string.Format(Se.Language.Options.Shortcuts.SetStyleX, 8) },
+        { nameof(MainViewModel.SetStyle9Command), string.Format(Se.Language.Options.Shortcuts.SetStyleX, 9) },
+        { nameof(MainViewModel.SetStyle10Command), string.Format(Se.Language.Options.Shortcuts.SetStyleX, 10) },
         { nameof(MainViewModel.SetNewActorCommand), Se.Language.Options.Shortcuts.SetNewActor },
         { nameof(MainViewModel.RemoveActorCommand), Se.Language.General.Actor + " - " + Se.Language.General.Remove },
         { nameof(MainViewModel.SurroundWith1Command), GetSurroundWithTitle(1) },
@@ -704,6 +717,7 @@ public static class ShortcutsMain
         { nameof(MainViewModel.ZoomLayoutInCommand), Se.Language.Options.Shortcuts.LayoutZoomIn },
         { nameof(MainViewModel.ZoomLayoutOutCommand), Se.Language.Options.Shortcuts.LayoutZoomOut },
         { nameof(MainViewModel.OpenSecondarySubtitleCommand), Se.Language.Video.OpenSecondarySubtitleOnVideoPlayer },
+        { nameof(MainViewModel.EditSecondarySubtitleSettingsCommand), Se.Language.Video.EditSecondarySubtitleSettings },
         { nameof(MainViewModel.ToggleCurrentSubtitleWhilePlayingCommand), Se.Language.Video.ToggleCurrentSubtitleWhilePlaying },
         { nameof(MainViewModel.ToggleSubtitlesOnVideoPlayerCommand), Se.Language.Video.ToggleSubtitlesOnVideoPlayer },
         { nameof(MainViewModel.ToggleSmpteTimingCommand), Se.Language.Main.Menu.SmpteTiming },
@@ -984,6 +998,7 @@ public static class ShortcutsMain
         AddShortcut(shortcuts, vm.ExtendPreviousEndToSelectedStartCommand, nameof(vm.ExtendPreviousEndToSelectedStartCommand), ShortcutCategory.General);
         AddShortcut(shortcuts, vm.ExtendNextStartToSelectedEndCommand, nameof(vm.ExtendNextStartToSelectedEndCommand), ShortcutCategory.General);
         AddShortcut(shortcuts, vm.ToggleLockTimeCodesCommand, nameof(vm.ToggleLockTimeCodesCommand), ShortcutCategory.General);
+        AddShortcut(shortcuts, vm.ToggleScreenPrivacyCommand, nameof(vm.ToggleScreenPrivacyCommand), ShortcutCategory.General);
         AddShortcut(shortcuts, vm.ShowHelpCommand, nameof(vm.ShowHelpCommand), ShortcutCategory.General);
         AddShortcut(shortcuts, vm.ShowSourceViewCommand, nameof(vm.ShowSourceViewCommand), ShortcutCategory.General);
         AddShortcut(shortcuts, vm.MergeWithLineBeforeCommand, nameof(vm.MergeWithLineBeforeCommand), ShortcutCategory.General);
@@ -991,6 +1006,7 @@ public static class ShortcutsMain
         AddShortcut(shortcuts, vm.MergeSelectedLinesCommand, nameof(vm.MergeSelectedLinesCommand), ShortcutCategory.General);
         AddShortcut(shortcuts, vm.MergeWithLineBeforeKeepBreaksCommand, nameof(vm.MergeWithLineBeforeKeepBreaksCommand), ShortcutCategory.General);
         AddShortcut(shortcuts, vm.MergeWithLineAfterKeepBreaksCommand, nameof(vm.MergeWithLineAfterKeepBreaksCommand), ShortcutCategory.General);
+        AddShortcut(shortcuts, vm.MergeWithLineAfterAndUnbreakCommand, nameof(vm.MergeWithLineAfterAndUnbreakCommand), ShortcutCategory.General);
         AddShortcut(shortcuts, vm.MergeWithLineBeforeAsDialogCommand, nameof(vm.MergeWithLineBeforeAsDialogCommand), ShortcutCategory.General);
         AddShortcut(shortcuts, vm.MergeWithLineAfterAsDialogCommand, nameof(vm.MergeWithLineAfterAsDialogCommand), ShortcutCategory.General);
         AddShortcut(shortcuts, vm.ToggleDialogDashesCommand, nameof(vm.ToggleDialogDashesCommand), ShortcutCategory.SubtitleGridAndTextBox);
@@ -1093,6 +1109,17 @@ public static class ShortcutsMain
         AddShortcut(shortcuts, vm.SetActor9Command, nameof(vm.SetActor9Command), ShortcutCategory.General);
         AddShortcut(shortcuts, vm.SetActor10Command, nameof(vm.SetActor10Command), ShortcutCategory.General);
         AddShortcut(shortcuts, vm.ShowActorPickerCommand, nameof(vm.ShowActorPickerCommand), ShortcutCategory.General);
+        AddShortcut(shortcuts, vm.ShowStylePickerCommand, nameof(vm.ShowStylePickerCommand), ShortcutCategory.General);
+        AddShortcut(shortcuts, vm.SetStyle1Command, nameof(vm.SetStyle1Command), ShortcutCategory.General);
+        AddShortcut(shortcuts, vm.SetStyle2Command, nameof(vm.SetStyle2Command), ShortcutCategory.General);
+        AddShortcut(shortcuts, vm.SetStyle3Command, nameof(vm.SetStyle3Command), ShortcutCategory.General);
+        AddShortcut(shortcuts, vm.SetStyle4Command, nameof(vm.SetStyle4Command), ShortcutCategory.General);
+        AddShortcut(shortcuts, vm.SetStyle5Command, nameof(vm.SetStyle5Command), ShortcutCategory.General);
+        AddShortcut(shortcuts, vm.SetStyle6Command, nameof(vm.SetStyle6Command), ShortcutCategory.General);
+        AddShortcut(shortcuts, vm.SetStyle7Command, nameof(vm.SetStyle7Command), ShortcutCategory.General);
+        AddShortcut(shortcuts, vm.SetStyle8Command, nameof(vm.SetStyle8Command), ShortcutCategory.General);
+        AddShortcut(shortcuts, vm.SetStyle9Command, nameof(vm.SetStyle9Command), ShortcutCategory.General);
+        AddShortcut(shortcuts, vm.SetStyle10Command, nameof(vm.SetStyle10Command), ShortcutCategory.General);
         AddShortcut(shortcuts, vm.SetNewActorCommand, nameof(vm.SetNewActorCommand), ShortcutCategory.General);
         AddShortcut(shortcuts, vm.RemoveActorCommand, nameof(vm.RemoveActorCommand), ShortcutCategory.General);
         AddShortcut(shortcuts, vm.SurroundWith1Command, nameof(vm.SurroundWith1Command), ShortcutCategory.SubtitleGridAndTextBox);
@@ -1180,6 +1207,7 @@ public static class ShortcutsMain
         AddShortcut(shortcuts, vm.ZoomLayoutInCommand, nameof(vm.ZoomLayoutInCommand), ShortcutCategory.General);
         AddShortcut(shortcuts, vm.ZoomLayoutOutCommand, nameof(vm.ZoomLayoutOutCommand), ShortcutCategory.General);
         AddShortcut(shortcuts, vm.OpenSecondarySubtitleCommand, nameof(vm.OpenSecondarySubtitleCommand), ShortcutCategory.General, ShortcutGroup.Video);
+        AddShortcut(shortcuts, vm.EditSecondarySubtitleSettingsCommand, nameof(vm.EditSecondarySubtitleSettingsCommand), ShortcutCategory.General, ShortcutGroup.Video);
         AddShortcut(shortcuts, vm.ToggleCurrentSubtitleWhilePlayingCommand, nameof(vm.ToggleCurrentSubtitleWhilePlayingCommand), ShortcutCategory.General, ShortcutGroup.Video);
         AddShortcut(shortcuts, vm.ToggleSubtitlesOnVideoPlayerCommand, nameof(vm.ToggleSubtitlesOnVideoPlayerCommand), ShortcutCategory.General, ShortcutGroup.Video);
         AddShortcut(shortcuts, vm.ToggleSmpteTimingCommand, nameof(vm.ToggleSmpteTimingCommand), ShortcutCategory.General, ShortcutGroup.Video);
@@ -1326,7 +1354,6 @@ public static class ShortcutsMain
             new(nameof(vm.UndoCommand), [cmd, "Z"]),
             new(nameof(vm.RedoCommand), [cmd, "Y"]),
             new(nameof(vm.ShowGoToLineCommand), [cmd, "G"]),
-            new(nameof(vm.ShowVideoVoiceManagerCommand), [cmd, "Shift", "V"]),
             new(nameof(vm.AddOrEditBookmarkCommand), [cmd, "Shift", "B"]),
             new(nameof(vm.GoToPreviousLineCommand), ["Alt", "Up"]),
             new(nameof(vm.GoToNextLineCommand), ["Alt", "Down"]),

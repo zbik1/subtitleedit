@@ -14,6 +14,8 @@ public class MpvReloader : IMpvReloader
 {
     public bool SmpteMode { get; set; }
     public bool SubtitlesVisible { get; set; } = true;
+    public bool SubtitlesForceHidden { get; set; }
+    public bool SubtitlesEffectivelyVisible => SubtitlesVisible && !SubtitlesForceHidden;
     public int VideoWidth { get; set; } = 1280;
     public int VideoHeight { get; set; } = 720;
 
@@ -38,7 +40,7 @@ public class MpvReloader : IMpvReloader
     /// counted as done either way, so a single mistimed refresh left the video without
     /// subtitles until the next edit (issue #13407).
     /// </returns>
-    public async Task<bool> RefreshMpv(LibMpvDynamicPlayer mpvContext, Subtitle subtitle, Subtitle? subtitleSecondary, SubtitleFormat uiFormat)
+    public async Task<bool> RefreshMpv(LibMpvDynamicPlayer mpvContext, Subtitle subtitle, Subtitle? subtitleSecondary, SubtitleFormat uiFormat, bool subtitleIsOwned = false)
     {
         if (subtitle.Paragraphs.Count == 0 && subtitleSecondary == null)
         {
@@ -81,8 +83,12 @@ public class MpvReloader : IMpvReloader
 
             // Deep copy on the calling (UI) thread: the caller usually passes the live
             // GetUpdateSubtitle() instance, which other UI code clears and repopulates at
-            // will, so it must not be touched from the background serialize below.
-            subtitle = new Subtitle(subtitle, false);
+            // will, so it must not be touched from the background serialize below. A caller
+            // that built a throw-away subtitle just for the preview hands it over instead.
+            if (!subtitleIsOwned)
+            {
+                subtitle = new Subtitle(subtitle, false);
+            }
 
             // Prime the lazy style-header memo while still on the UI thread, so the
             // background thread only ever reads the field (UpdateMpvStyle writes it
@@ -165,7 +171,7 @@ public class MpvReloader : IMpvReloader
 
             // Re-assert visibility so a hidden preview stays hidden on a freshly
             // created player (fullscreen/undock create a new mpv instance).
-            mpvContext.SetSubtitleVisibility(SubtitlesVisible);
+            mpvContext.SetSubtitleVisibility(SubtitlesEffectivelyVisible);
             _subtitlePrev = subtitle;
             return true;
         }
@@ -192,17 +198,18 @@ public class MpvReloader : IMpvReloader
             // text on the video (issue #13861). Lambda Cap decodes to the same markup (issue #14165).
             subtitle = NetflixImsc11JapaneseToAss.ConvertToSubtitle(subtitle, VideoWidth, VideoHeight);
             SecondarySubtitleMerger.AddSecondarySubtitle(subtitle, subtitleSecondary, SmpteMode);
+            AssaCentisecondTiming.FloorToCentiseconds(subtitle);
             return (subtitle, subtitle.ToText(_assFormat), 0, false);
         }
 
         if (uiFormatType == typeof(WebVTT) || uiFormatType == typeof(WebVTTFileWithLineNumber))
         {
             var defaultStyle = GetMpvPreviewStyle(Se.Settings.Video);
-            defaultStyle.BorderStyle = "3";
             // No extra copy here: "subtitle" is already RefreshMpv's private copy, and
             // Convert deep-copies its input again internally without mutating it.
             subtitle = WebVttToAssa.Convert(subtitle, defaultStyle, VideoWidth, VideoHeight);
             SecondarySubtitleMerger.AddSecondarySubtitle(subtitle, subtitleSecondary, SmpteMode);
+            AssaCentisecondTiming.FloorToCentiseconds(subtitle);
             // The WebVTT path never used the hash memo, so keep it untouched (HashValid false).
             return (subtitle, subtitle.ToText(_assFormat), 0, false);
         }
@@ -261,6 +268,8 @@ public class MpvReloader : IMpvReloader
         }
 
         SecondarySubtitleMerger.AddSecondarySubtitle(subtitle, subtitleSecondary, SmpteMode);
+        // ASSA centiseconds rounded up past the frame lost the first frame (issue #15520).
+        AssaCentisecondTiming.FloorToCentiseconds(subtitle);
         var hash = subtitle.GetFastHashCode(null);
         if (hash != oldHash || string.IsNullOrEmpty(oldText))
         {

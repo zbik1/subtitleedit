@@ -8,6 +8,7 @@ using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Core.SubtitleFormats;
 using Nikse.SubtitleEdit.Features.Main;
 using Nikse.SubtitleEdit.Features.Shared;
+using Nikse.SubtitleEdit.Features.Shared.GetAudioClips;
 using Nikse.SubtitleEdit.Features.Shared.PromptFileSaved;
 using Nikse.SubtitleEdit.Features.Shared.PromptTextBox;
 using Nikse.SubtitleEdit.Features.Tools.MergeContinuationLines;
@@ -57,6 +58,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -86,6 +88,7 @@ public partial class TextToSpeechViewModel : ObservableObject
     [ObservableProperty] private string _apiKey;
     [ObservableProperty] private bool _hasRegion;
     [ObservableProperty] private string _region;
+    [ObservableProperty] private string _regionLabel;
     [ObservableProperty] private bool _hasModel;
     [ObservableProperty] private bool _isVoiceCountVisible;
     [ObservableProperty] private string _linesInfo = string.Empty;
@@ -195,6 +198,7 @@ public partial class TextToSpeechViewModel : ObservableObject
         Languages = new ObservableCollection<TtsLanguage>();
         ApiKey = string.Empty;
         Region = string.Empty;
+        RegionLabel = Se.Language.General.Region;
         ProgressText = string.Empty;
         IsVoiceTestEnabled = true;
         IsVoiceComboEnabled = true;
@@ -265,6 +269,7 @@ public partial class TextToSpeechViewModel : ObservableObject
             HasLanguageParameter = SelectedEngine.HasLanguageParameter;
             HasApiKey = SelectedEngine.HasApiKey;
             HasRegion = SelectedEngine.HasRegion;
+            RegionLabel = GetRegionLabel(SelectedEngine);
             HasModel = SelectedEngine.HasModel;
             HasKeyFile = SelectedEngine.HasKeyFile;
             IsEdgeTtsEngine = SelectedEngine is EdgeTts;
@@ -300,6 +305,10 @@ public partial class TextToSpeechViewModel : ObservableObject
         else if (SelectedEngine is MistralSpeech)
         {
             ApiKey = Se.Settings.Video.TextToSpeech.MistralApiKey;
+        }
+        else if (SelectedEngine is OpenAiCompatibleSpeech)
+        {
+            ApiKey = OpenAiCompatibleSpeech.GetApiKey(OpenAiCompatibleSpeech.SavedProvider);
         }
         else if (SelectedEngine is Murf)
         {
@@ -337,6 +346,16 @@ public partial class TextToSpeechViewModel : ObservableObject
         {
             Se.Settings.Video.TextToSpeech.MistralApiKey = ApiKey;
             Se.Settings.Video.TextToSpeech.MistralModel = SelectedModel ?? "voxtral-mini-tts-2603";
+        }
+        else if (SelectedEngine is OpenAiCompatibleSpeech)
+        {
+            var provider = OpenAiCompatibleSpeech.ResolveProvider(SelectedRegion ?? OpenAiCompatibleSpeech.SavedProvider);
+            Se.Settings.Video.TextToSpeech.OpenAiCompatibleProvider = provider;
+            OpenAiCompatibleSpeech.SetApiKey(provider, ApiKey);
+            if (!string.IsNullOrEmpty(SelectedModel))
+            {
+                OpenAiCompatibleSpeech.SetSavedModel(provider, SelectedModel);
+            }
         }
         else if (SelectedEngine is Qwen3TtsCpp)
         {
@@ -518,10 +537,98 @@ public partial class TextToSpeechViewModel : ObservableObject
         }
     }
 
+    private static string GetRegionLabel(ITtsEngine engine) =>
+        engine is OpenAiCompatibleSpeech ? Se.Language.Video.TextToSpeech.Provider : Se.Language.General.Region;
+
+    partial void OnSelectedRegionChanged(string? value)
+    {
+        // For the OpenAI-compatible engine the region combo picks the provider. Each provider
+        // keeps its own API key and model, so stash the typed key under the old provider and
+        // load the new provider's key, models and voices.
+        if (SelectedEngine is not OpenAiCompatibleSpeech || string.IsNullOrEmpty(value))
+        {
+            return;
+        }
+
+        var oldProvider = OpenAiCompatibleSpeech.SavedProvider;
+        var newProvider = OpenAiCompatibleSpeech.ResolveProvider(value);
+        if (newProvider == oldProvider)
+        {
+            return;
+        }
+
+        OpenAiCompatibleSpeech.SetApiKey(oldProvider, ApiKey);
+        Se.Settings.Video.TextToSpeech.OpenAiCompatibleProvider = newProvider;
+        Dispatcher.UIThread.PostSafe(async () => await ReloadOpenAiCompatibleAsync(providerChanged: true));
+    }
+
+    private async Task ReloadOpenAiCompatibleAsync(bool providerChanged)
+    {
+        if (SelectedEngine is not OpenAiCompatibleSpeech engine)
+        {
+            return;
+        }
+
+        var provider = OpenAiCompatibleSpeech.SavedProvider;
+        if (providerChanged)
+        {
+            ApiKey = OpenAiCompatibleSpeech.GetApiKey(provider);
+
+            var models = await engine.GetModels();
+            var savedModel = OpenAiCompatibleSpeech.GetSavedModel(provider);
+            var model = models.FirstOrDefault(m => m == savedModel) ?? models.FirstOrDefault();
+
+            // Saved first, so the SelectedModel assignment below is a no-op for
+            // OnSelectedModelChanged instead of a second voice reload.
+            OpenAiCompatibleSpeech.SetSavedModel(provider, model);
+            Models.Clear();
+            foreach (var m in models)
+            {
+                Models.Add(m);
+            }
+
+            SelectedModel = model;
+        }
+
+        Voice[] voices;
+        try
+        {
+            voices = await engine.GetVoices(string.Empty);
+        }
+        catch (Exception ex)
+        {
+            SeLogger.Error(ex, "OpenAI-compatible TTS: loading voices failed");
+            voices = [];
+        }
+
+        var currentVoiceName = SelectedVoice?.Name;
+        Voices.Clear();
+        foreach (var voice in voices)
+        {
+            Voices.Add(voice);
+        }
+
+        IsVoiceCountVisible = Voices.Count > 0;
+        SelectedVoice = Voices.FirstOrDefault(v => v.Name == currentVoiceName)
+                        ?? Voices.FirstOrDefault(v => v.Name == Se.Settings.Video.TextToSpeech.Voice)
+                        ?? Voices.FirstOrDefault();
+    }
+
     partial void OnSelectedModelChanged(string? value)
     {
         RefreshInstructionVisibility();
         UpdateVoiceLock();
+
+        // OpenAI (tts-1 vs gpt-4o-mini-tts) and every OpenRouter model have their own voice
+        // list. GetVoices reads the saved model, so persist it before reloading. The equality
+        // check skips the engine-switch restore, which selects the saved model itself.
+        if (SelectedEngine is OpenAiCompatibleSpeech
+            && !string.IsNullOrEmpty(value)
+            && value != OpenAiCompatibleSpeech.GetSavedModel(OpenAiCompatibleSpeech.SavedProvider))
+        {
+            OpenAiCompatibleSpeech.SetSavedModel(OpenAiCompatibleSpeech.SavedProvider, value);
+            Dispatcher.UIThread.PostSafe(async () => await ReloadOpenAiCompatibleAsync(providerChanged: false));
+        }
 
         // Qwen3 (CrispASR) returns a different voice list per model — VoiceDesign exposes
         // "Default", CustomVoice exposes the nine fixed built-in speakers, and Voice clone
@@ -1612,7 +1719,19 @@ public partial class TextToSpeechViewModel : ObservableObject
     [RelayCommand]
     private async Task ShowEngineSettings()
     {
+        if (SelectedEngine is OpenAiCompatibleSpeech)
+        {
+            // The reload below reads the key back from settings - don't lose one just typed.
+            OpenAiCompatibleSpeech.SetApiKey(OpenAiCompatibleSpeech.SavedProvider, ApiKey);
+        }
+
         await TtsEngineSettingsDialog.ShowAsync(SelectedEngine, Window!, _windowService);
+
+        // The custom server's URL, models and voices are edited in the settings dialog.
+        if (SelectedEngine is OpenAiCompatibleSpeech)
+        {
+            await ReloadOpenAiCompatibleAsync(providerChanged: true);
+        }
 
         // An engine may have been (re)downloaded inside its settings dialog - re-check the
         // install-status dots in the engine and model combos.
@@ -2271,6 +2390,27 @@ public partial class TextToSpeechViewModel : ObservableObject
 
         var arguments = SpeechIsolationModel.BuildSeparateArguments(modelFileName, originalAudioFileName, workFolder, SpeechIsolationModel.BackgroundStem);
         Se.WriteToolsLog($"{executable} {arguments}");
+
+        // The separator's per-chunk lines on stderr are the only measure of how far it is - and
+        // on a machine without a GPU it is minutes per minute of video (#15176). They drive the
+        // percentage and the time-left estimate; the GPU path prints none and is quick. The
+        // output is also kept: when the separator fails it is the only clue to why.
+        var progress = new SpeechIsolationProgress(SpeechIsolationProgress.GetChunkCountFromWaveFile(originalAudioFileName));
+        var separateLog = new StringBuilder();
+        DataReceivedEventHandler onLine = (_, args) =>
+        {
+            if (string.IsNullOrWhiteSpace(args.Data))
+            {
+                return;
+            }
+
+            lock (separateLog)
+            {
+                separateLog.AppendLine(args.Data);
+            }
+
+            ReportSpeechRemovalProgress(progress, args.Data);
+        };
         using var separateProcess = new Process
         {
             StartInfo = new ProcessStartInfo(executable, arguments)
@@ -2278,18 +2418,42 @@ public partial class TextToSpeechViewModel : ObservableObject
                 WorkingDirectory = Path.GetDirectoryName(executable),
                 UseShellExecute = false,
                 CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
             }
         };
+        separateProcess.OutputDataReceived += onLine;
+        separateProcess.ErrorDataReceived += onLine;
         await separateProcess.StartAndWaitAsync(cancellationToken);
 
         var backgroundFileName = SpeechIsolationModel.GetStemFileName(originalAudioFileName, workFolder, SpeechIsolationModel.BackgroundStem);
         if (separateProcess.ExitCode != 0 || !File.Exists(backgroundFileName))
         {
-            Se.WriteToolsLog($"TTS remove original speech: separation failed with exit code {separateProcess.ExitCode}", true);
+            lock (separateLog)
+            {
+                Se.WriteToolsLog($"TTS remove original speech: separation failed with exit code {separateProcess.ExitCode}:{Environment.NewLine}{separateLog}", true);
+            }
+
             return null;
         }
 
         return backgroundFileName;
+    }
+
+    private void ReportSpeechRemovalProgress(SpeechIsolationProgress progress, string? line)
+    {
+        if (!progress.TryUpdate(line) || progress.Fraction is not { } fraction)
+        {
+            return;
+        }
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (IsGenerating)
+            {
+                ProgressValue = fraction * 100.0;
+            }
+        });
     }
 
     private async Task<bool> EnsureBackgroundMusicInstalled()
@@ -2348,9 +2512,8 @@ public partial class TextToSpeechViewModel : ObservableObject
                 return;
             }
 
-            var generateSeconds = BackgroundMusicGenerator.GetGenerateSeconds(settings.GenerateSeconds, target);
             var music = _backgroundMusic;
-            if (music == null || !music.Matches(prompt, settings.Bpm, generateSeconds))
+            if (music == null || !music.Matches(prompt, settings.Bpm, settings.GenerateSeconds, target))
             {
                 ProgressText = l.GeneratingBackgroundMusicDotDotDot;
                 ProgressValue = 0;
@@ -2360,7 +2523,7 @@ public partial class TextToSpeechViewModel : ObservableObject
                     ProgressValue = p.Percent;
                     ProgressText = $"{l.GeneratingBackgroundMusicDotDotDot} {Math.Floor(p.Percent).ToString(CultureInfo.CurrentCulture)}%";
                 });
-                music = await BackgroundMusicGenerator.GenerateAsync(prompt, settings.Bpm, generateSeconds, seed, tempFolder, progress, cancellationToken);
+                music = await BackgroundMusicGenerator.GenerateAsync(prompt, settings.Bpm, settings.GenerateSeconds, target, seed, tempFolder, progress, cancellationToken);
                 _backgroundMusic = music;
             }
 
@@ -3058,12 +3221,25 @@ public partial class TextToSpeechViewModel : ObservableObject
         // The separation works in 44.1 kHz stereo - over a gigabyte of wav for a feature film -
         // so its files get a folder of their own that is gone as soon as the video is written.
         string? separationFolder = null;
+        var ffmpegOutput = new FfmpegOutputTail();
+        var ffmpegExitCode = 0;
+        // Skip the progress lines, or a long run leaves only those in the log and pushes out the
+        // warnings that explain a bad result (e.g. "Non-monotonic DTS" where the video stopped).
+        DataReceivedEventHandler ffmpegOutputHandler = (_, e) =>
+        {
+            var line = e.Data?.TrimStart();
+            if (!string.IsNullOrEmpty(line) && !line.StartsWith("frame=", StringComparison.Ordinal) && !line.StartsWith("size=", StringComparison.Ordinal))
+            {
+                ffmpegOutput.Add(e.Data!);
+            }
+        };
         try
         {
             string? backgroundFileName = null;
             if (ShouldRemoveOriginalSpeech())
             {
                 ProgressText = Se.Language.Video.TextToSpeech.RemovingOriginalSpeech;
+                ProgressValue = 0; // a stage of its own: the bar and the time-left estimate restart here
                 separationFolder = Path.Combine(Path.GetTempPath(), "se-tts-separation-" + Guid.NewGuid());
                 Directory.CreateDirectory(separationFolder);
                 backgroundFileName = await MakeSpeechFreeBackground(separationFolder, cancellationToken);
@@ -3077,12 +3253,13 @@ public partial class TextToSpeechViewModel : ObservableObject
 
             // With the speech gone there is nothing left for the new speech to compete with, so
             // the music and effects play at full volume unless ducking asks for less.
-            var addAudioProcess = backgroundFileName != null
-                ? FfmpegGenerator.AddAudioTrackWithBackground(_videoFileName, backgroundFileName, audioFileName, outputFileName, audioEncoding, stereo, ducking ? duckingVolume : 100)
+            using var addAudioProcess = backgroundFileName != null
+                ? FfmpegGenerator.AddAudioTrackWithBackground(_videoFileName, backgroundFileName, audioFileName, outputFileName, audioEncoding, stereo, ducking ? duckingVolume : 100, ffmpegOutputHandler)
                 : ducking
-                    ? FfmpegGenerator.AddAudioTrackWithDucking(_videoFileName, audioFileName, outputFileName, audioEncoding, stereo, duckingVolume)
-                    : FfmpegGenerator.AddAudioTrack(_videoFileName, audioFileName, outputFileName, audioEncoding, stereo);
+                    ? FfmpegGenerator.AddAudioTrackWithDucking(_videoFileName, audioFileName, outputFileName, audioEncoding, stereo, duckingVolume, ffmpegOutputHandler)
+                    : FfmpegGenerator.AddAudioTrack(_videoFileName, audioFileName, outputFileName, audioEncoding, stereo, ffmpegOutputHandler);
             await addAudioProcess.StartAndWaitAsync(cancellationToken);
+            ffmpegExitCode = addAudioProcess.ExitCode;
         }
         finally
         {
@@ -3106,7 +3283,7 @@ public partial class TextToSpeechViewModel : ObservableObject
         // not exist. Verify the output and report instead.
         if (!File.Exists(outputFileName) || new FileInfo(outputFileName).Length == 0)
         {
-            SeLogger.Error($"TextToSpeech: adding audio to video failed - no output produced (encoding=\"{audioEncoding}\", ducking={Se.Settings.Video.TextToSpeech.AudioDuckingEnabled})");
+            SeLogger.Error($"TextToSpeech: adding audio to video failed - no output produced (encoding=\"{audioEncoding}\", ducking={Se.Settings.Video.TextToSpeech.AudioDuckingEnabled}, exit code {ffmpegExitCode}){Environment.NewLine}{ffmpegOutput}");
             Se.WriteToolsLog($"TTS add-to-video failed: ffmpeg produced no output for \"{outputFileName}\" (encoding=\"{audioEncoding}\", ducking={Se.Settings.Video.TextToSpeech.AudioDuckingEnabled})", true);
             if (Window != null)
             {
@@ -3122,7 +3299,49 @@ public partial class TextToSpeechViewModel : ObservableObject
             return null;
         }
 
+        if (ffmpegExitCode != 0)
+        {
+            SeLogger.Error($"TextToSpeech: ffmpeg exited with code {ffmpegExitCode} while adding audio to \"{outputFileName}\"{Environment.NewLine}{ffmpegOutput}");
+        }
+
+        await WarnIfVideoTruncated(outputFileName, ffmpegOutput, cancellationToken);
+
         return outputFileName;
+    }
+
+    /// <summary>
+    /// The video is stream-copied, and on some sources ffmpeg stops copying it early while the new
+    /// audio runs to the end - the picture then freezes after a minute (#15265). The container
+    /// still reports the full length, so compare the video streams themselves.
+    /// </summary>
+    private async Task WarnIfVideoTruncated(string outputFileName, FfmpegOutputTail ffmpegOutput, CancellationToken cancellationToken)
+    {
+        ProgressText = Se.Language.Video.TextToSpeech.AddingAudioToVideoFileDotDotDot;
+        var sourceSeconds = await VideoStreamDuration.GetSecondsAsync(_videoFileName, cancellationToken);
+        var outputSeconds = sourceSeconds == null ? null : await VideoStreamDuration.GetSecondsAsync(outputFileName, cancellationToken);
+        ProgressText = string.Empty;
+        if (sourceSeconds == null || outputSeconds == null || !VideoStreamDuration.IsTruncated(sourceSeconds.Value, outputSeconds.Value))
+        {
+            return;
+        }
+
+        var source = TimeSpan.FromSeconds(sourceSeconds.Value);
+        var output = TimeSpan.FromSeconds(outputSeconds.Value);
+        SeLogger.Error($"TextToSpeech: video stream in \"{outputFileName}\" is {output:hh\\:mm\\:ss\\.fff} long, source \"{_videoFileName}\" is {source:hh\\:mm\\:ss\\.fff}{Environment.NewLine}{ffmpegOutput}");
+        if (Window != null)
+        {
+            await MessageBox.Show(
+                Window,
+                Se.Language.General.Warning,
+                string.Format(Se.Language.Video.TextToSpeech.VideoTruncatedWarning, FormatDuration(output), FormatDuration(source)),
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+    }
+
+    private static string FormatDuration(TimeSpan duration)
+    {
+        return duration.TotalHours >= 1 ? duration.ToString(@"h\:mm\:ss") : duration.ToString(@"m\:ss");
     }
 
     private async Task<string?> MergeAudioParagraphs(TtsStepResult[] previousStepResult, CancellationToken cancellationToken)
@@ -3747,19 +3966,30 @@ public partial class TextToSpeechViewModel : ObservableObject
             return false;
         }
 
-        // FireRedTTS3 refuses a clip without a transcript (MakePerLineCloneVoice returns null),
-        // and the transcripts come from the original-language subtitle. Without one loaded every
-        // line would silently fall back to the first imported voice - a run that "does not
-        // clone" (#14480). Say so up front instead of after minutes of generation.
-        if (engine is FireRedTts3AudioCpp && (_originalSubtitle == null || _originalSubtitle.Paragraphs.Count == 0))
+        // FireRedTTS3, OmniVoice TTS and Qwen3 refuse a clip without a transcript
+        // (MakePerLineCloneVoice returns null), and the transcripts come from the
+        // original-language subtitle. Without one loaded every line would silently fall back to
+        // an ordinary voice - a run that "does not clone" (#14480) - so ask up front, while the
+        // user is still there, whether speech-to-text should supply them (#15145).
+        var transcribeClips = false;
+        if (PerLineVoiceClone.NeedsTranscript(engine))
         {
-            await MessageBox.Show(
-                Window!,
-                Se.Language.General.Error,
-                string.Format(Se.Language.Video.TextToSpeech.CloneVoicePerLineNeedsOriginalSubtitleX, engine.Name),
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
-            return false;
+            var linesWithoutTranscript = _subtitle.Paragraphs.Count(p => GetSpokenTextInVideo(p) == null);
+            if (linesWithoutTranscript > 0)
+            {
+                var answer = await MessageBox.Show(
+                    Window!,
+                    Se.Language.Video.TextToSpeech.VoiceCloneTranscriptTitle,
+                    string.Format(Se.Language.Video.TextToSpeech.CloneVoicePerLineTranscribeClipsXYZ, engine.Name, linesWithoutTranscript, _subtitle.Paragraphs.Count),
+                    MessageBoxButtons.YesNoCancel,
+                    MessageBoxIcon.Question);
+                if (answer != MessageBoxResult.Yes && answer != MessageBoxResult.No)
+                {
+                    return false;
+                }
+
+                transcribeClips = answer == MessageBoxResult.Yes;
+            }
         }
 
         // A fresh folder per run: the clips of a previous run belong to whatever the subtitle
@@ -3794,6 +4024,11 @@ public partial class TextToSpeechViewModel : ObservableObject
             // left it pinned at 0 for the whole clip-cutting phase).
             progress: (done, total) => ProgressValue = total == 0 ? 0 : (double)done / total * 100.0,
             cancellationToken);
+
+        if (transcribeClips && !await TranscribePerLineCloneClipsAsync())
+        {
+            return false;
+        }
 
         if (_perLineCloneClips.Count > 0)
         {
@@ -3836,6 +4071,45 @@ public partial class TextToSpeechViewModel : ObservableObject
             cancellationToken);
 
         return clipFileName == null ? null : PerLineVoiceClone.MakeVoiceForClip(engine, clipFileName);
+    }
+
+    /// <summary>
+    /// Runs speech-to-text over the reference clips that have no transcript and writes what it
+    /// hears as their sidecars. False when the user backed out of it, which stops the run.
+    /// </summary>
+    /// <remarks>
+    /// Per clip rather than once over the whole video: the transcript has to be what is said in
+    /// that clip and nothing else, and a clip is often wider than its line (a short line borrows
+    /// from the silence around it), so no cue of a whole-video transcription lines up with it. A
+    /// clip nothing was heard in keeps no sidecar and its line falls back to an ordinary voice.
+    /// </remarks>
+    private async Task<bool> TranscribePerLineCloneClipsAsync()
+    {
+        var clipFileNames = PerLineVoiceClone.GetClipsWithoutTranscript(_perLineCloneClips.Values);
+        if (clipFileNames.Count == 0 || Window == null)
+        {
+            return true;
+        }
+
+        var audioClips = clipFileNames
+            .Select(clip => new AudioClip(clip, new SubtitleLineViewModel()))
+            .ToList();
+
+        // No auto-start and no language hint: the language spoken in the video is not the one
+        // picked in this window (that is the language of the dub), so the user has to say.
+        var result = await _windowService.ShowDialogAsync<SpeechToTextWindow, SpeechToTextViewModel>(Window, vm =>
+        {
+            vm.InitializeBatch(audioClips, -1, autoStart: false, language: null);
+        });
+
+        // Whatever was transcribed is kept even when the dialog was closed on a failed clip -
+        // OkPressed only tells a run that was abandoned before it produced anything.
+        var written = PerLineVoiceClone.WriteTranscripts(
+            result.ResultAudioClips.Select(clip => (clip.AudioFileName, clip.Transcription.Paragraphs.Select(p => p.Text))),
+            BuildRefTextFromTranscription);
+        Se.WriteToolsLog($"Per-line voice clone: speech-to-text gave {written} of {clipFileNames.Count} reference clips a transcript");
+
+        return result.OkPressed || written > 0;
     }
 
     /// <summary>
@@ -4533,6 +4807,7 @@ public partial class TextToSpeechViewModel : ObservableObject
             HasLanguageParameter = engine.HasLanguageParameter;
             HasApiKey = engine.HasApiKey;
             HasRegion = engine.HasRegion;
+            RegionLabel = GetRegionLabel(engine);
             HasModel = engine.HasModel;
             HasKeyFile = engine.HasKeyFile;
             IsEdgeTtsEngine = engine is EdgeTts;
@@ -4636,7 +4911,11 @@ public partial class TextToSpeechViewModel : ObservableObject
                     Regions.Add(region);
                 }
 
-                SelectedRegion = Regions.FirstOrDefault();
+                // The OpenAI-compatible engine's "region" is its provider; start on the saved
+                // one so OnSelectedRegionChanged doesn't read the default as a provider switch.
+                SelectedRegion = engine is OpenAiCompatibleSpeech
+                    ? OpenAiCompatibleSpeech.SavedProvider
+                    : Regions.FirstOrDefault();
             }
 
             if (HasModel)
@@ -4648,7 +4927,9 @@ public partial class TextToSpeechViewModel : ObservableObject
                     Models.Add(model);
                 }
 
-                SelectedModel = Models.FirstOrDefault();
+                SelectedModel = engine is OpenAiCompatibleSpeech
+                    ? Models.FirstOrDefault(p => p == OpenAiCompatibleSpeech.GetSavedModel(OpenAiCompatibleSpeech.SavedProvider)) ?? Models.FirstOrDefault()
+                    : Models.FirstOrDefault();
             }
 
             if (SelectedEngine is AzureSpeech)
@@ -4678,6 +4959,11 @@ public partial class TextToSpeechViewModel : ObservableObject
                 {
                     SelectedModel = Models.FirstOrDefault();
                 }
+            }
+            else if (SelectedEngine is OpenAiCompatibleSpeech)
+            {
+                ApiKey = OpenAiCompatibleSpeech.GetApiKey(OpenAiCompatibleSpeech.SavedProvider);
+                IsEngineSettingsVisible = true;
             }
             else if (SelectedEngine is Qwen3TtsCpp)
             {

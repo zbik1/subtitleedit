@@ -95,11 +95,8 @@ public partial class MergeSameTimeCodesViewModel : ObservableObject, IClosingCle
         MergeItems.Clear();
         MergeSubtitles.Clear();
 
-        var mergedIndexes = new List<int>();
-        var removed = new HashSet<int>();
         var makeDialog = MergeDialog;
         var reBreak = AutoBreak;
-        var numberOfMerges = 0;
         SubtitleLineViewModel? p = null;
         MergeSubtitles.Clear();
         var singleMergeSubtitles = new List<SubtitleLineViewModel>();
@@ -116,7 +113,7 @@ public partial class MergeSameTimeCodesViewModel : ObservableObject, IClosingCle
             }
 
             var next = _subtitles[i];
-            if (p != null && QualifiesForMerge(p, next, MaxMillisecondsDifference) && IsFixAllowed(p))
+            if (p != null && QualifiesForMerge(p, next, MaxMillisecondsDifference))
             {
                 if (!singleMergeSubtitles.Contains(p))
                 {
@@ -157,17 +154,6 @@ public partial class MergeSameTimeCodesViewModel : ObservableObject, IClosingCle
                     mergedText = Utilities.AutoBreakLine(mergedText, _language);
                 }
 
-                removed.Add(i);
-                numberOfMerges++;
-                if (!mergedIndexes.Contains(i))
-                {
-                    mergedIndexes.Add(i);
-                }
-
-                if (!mergedIndexes.Contains(i - 1))
-                {
-                    mergedIndexes.Add(i - 1);
-                }
             }
             else
             {
@@ -243,22 +229,6 @@ public partial class MergeSameTimeCodesViewModel : ObservableObject, IClosingCle
                Math.Abs(next.EndTime.TotalMilliseconds - p.EndTime.TotalMilliseconds) <= maxMsBetween;
     }
 
-    private bool IsFixAllowed(SubtitleLineViewModel p)
-    {
-        foreach (var mi in MergeItems.Where(p => !p.Apply))
-        {
-            foreach (var line in mi.LinesToMerge)
-            {
-                if (line.Id == p.Id)
-                {
-                    return false;
-                }
-            }
-        }
-
-        return true;
-    }
-
     private void LoadSettings()
     {
         MaxMillisecondsDifference = Se.Settings.Tools.MergeSameTimeCode.MaxMillisecondsDifference;
@@ -280,6 +250,20 @@ public partial class MergeSameTimeCodesViewModel : ObservableObject, IClosingCle
         var result = new List<SubtitleLineViewModel>();
         var skipCount = 0;
 
+        // Line id -> the first ticked merge item that holds it (what the FirstOrDefault scan of
+        // all merge items per line found), built once.
+        var mergeItemByLineId = new Dictionary<Guid, MergeDisplayItem>();
+        foreach (var mergeItem in MergeItems)
+        {
+            if (mergeItem.Apply)
+            {
+                foreach (var line in mergeItem.LinesToMerge)
+                {
+                    mergeItemByLineId.TryAdd(line.Id, mergeItem);
+                }
+            }
+        }
+
         foreach (var s in _subtitles)
         {
             if (skipCount > 0)
@@ -288,7 +272,7 @@ public partial class MergeSameTimeCodesViewModel : ObservableObject, IClosingCle
                 continue;
             }
 
-            var match = MergeItems.FirstOrDefault(p => p.Apply && p.LinesToMerge.Any(p => p.Id == s.Id));
+            mergeItemByLineId.TryGetValue(s.Id, out var match);
             if (match != null)
             {
                 var merged = new SubtitleLineViewModel(s);

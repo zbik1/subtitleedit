@@ -414,21 +414,32 @@ public partial class ImportPlainTextViewModel : ObservableObject, IClosingCleanu
                     WorkingDirectory = Path.GetDirectoryName(executable) ?? string.Empty,
                     UseShellExecute = false,
                     CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
                 }
             };
+
+            // The separator's per-chunk lines are its only progress (#15176) - the GPU path
+            // prints none, so the elapsed time stays as the one thing always shown.
+            var progress = new SpeechIsolationProgress(SpeechIsolationProgress.GetChunkCountFromWaveFile(audioFileName));
+            DataReceivedEventHandler onLine = (_, args) => progress.TryUpdate(args.Data);
+            process.OutputDataReceived += onLine;
+            process.ErrorDataReceived += onLine;
 
 #pragma warning disable CA1416
             process.Start();
 #pragma warning restore CA1416
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
             _isolateSpeechProcess = process;
 
-            // The separator prints no progress, so the elapsed time is all there is to show.
             var stopwatch = Stopwatch.StartNew();
             while (!process.HasExited)
             {
+                var elapsed = new TimeCode(stopwatch.ElapsedMilliseconds).ToShortDisplayString();
                 AlignProgress = string.Format(
                     Se.Language.File.Import.ForcedAlignerIsolatingSpeech,
-                    new TimeCode(stopwatch.ElapsedMilliseconds).ToShortDisplayString());
+                    progress.Percent is { } percent ? $"{elapsed} - {percent}%" : elapsed);
                 await Task.Delay(250);
             }
 
@@ -564,9 +575,10 @@ public partial class ImportPlainTextViewModel : ObservableObject, IClosingCleanu
 
     private async Task<bool> ExtractAudioForAlignmentAsync(string audioFileName)
     {
-        // 16 kHz mono PCM - what every CTC aligner expects.
+        // 16 kHz mono PCM - what every CTC aligner expects. "aresample=async=1:first_pts=0" keeps
+        // gaps in the audio timestamps as silence, or the aligned times after a gap come out early (#15385).
         var arguments =
-            $"-hide_banner -nostats -y -i \"{_videoFileName}\" -vn -ar 16000 -ac 1 -acodec pcm_s16le \"{audioFileName}\"";
+            $"-hide_banner -nostats -y -i \"{_videoFileName}\" -vn -af aresample=async=1:first_pts=0 -ar 16000 -ac 1 -acodec pcm_s16le \"{audioFileName}\"";
 
         using var process = new System.Diagnostics.Process
         {
